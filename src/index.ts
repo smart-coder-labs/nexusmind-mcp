@@ -14,8 +14,10 @@ import type { Memory } from './client.js'
 
 function formatMemory(m: Memory): string {
   const date = new Date(m.created_at).toLocaleDateString()
+  const type = m.type ? `${m.type} ` : ''
   const tags = m.tags.length > 0 ? ` [${m.tags.join(', ')}]` : ''
-  return `• [${m.tool}] ${m.project || '(no project)'} — ${m.content}${tags} (${date})`
+  const rev  = m.revision_count > 1 ? ` (rev ${m.revision_count})` : ''
+  return `• [${type}${m.tool}] ${m.project || '(no project)'} — ${m.title ?? m.content}${tags}${rev} (${date})`
 }
 
 function formatList(memories: Memory[]): string {
@@ -27,24 +29,40 @@ function formatList(memories: Memory[]): string {
 
 const server = new McpServer({
   name: 'nexusmind',
-  version: '0.1.0',
+  version: '0.2.0',
 })
+
+const MEMORY_TYPES = [
+  'architecture', 'bugfix', 'decision', 'discovery',
+  'config', 'pattern', 'feedback', 'preference',
+  'project', 'session_summary', 'feature', 'refactoring', 'manual',
+] as const
+
+const typeEnum = z.enum(MEMORY_TYPES).optional().describe(
+  'Memory type — architecture | bugfix | decision | discovery | config | pattern | feedback | preference | project | session_summary | feature | refactoring | manual'
+)
 
 // store_memory
 server.tool(
   'store_memory',
   'Store a memory, decision, or piece of context for later retrieval by the team.',
   {
-    content: z.string().describe('The memory content to store (decision, convention, finding, etc.)'),
-    project: z.string().optional().describe('Project or repo name (e.g. "nexusmind", "payments-api")'),
-    tool:    z.string().optional().describe('Tool name — defaults to "claude-code"'),
-    tags:    z.array(z.string()).optional().describe('Tags for categorization (e.g. ["auth", "convention"])'),
+    content:   z.string().describe('Full memory content (decision rationale, bug root cause, discovery, etc.)'),
+    title:     z.string().optional().describe('Short searchable title (e.g. "Fixed N+1 query in UserList")'),
+    type:      typeEnum,
+    topic_key: z.string().optional().describe('Stable key for upsertable topics — same key updates the existing memory (e.g. "architecture/auth-model")'),
+    scope:     z.enum(['project', 'personal']).optional().describe('project (team-shared, default) or personal (cross-project)'),
+    project:   z.string().optional().describe('Project or repo name (e.g. "nexusmind", "payments-api")'),
+    tool:      z.string().optional().describe('Tool name — defaults to "claude-code"'),
+    tags:      z.array(z.string()).optional().describe('Tags for filtering (e.g. ["auth", "convention"])'),
+    session_id: z.string().optional().describe('Session ID to link this memory to a session'),
   },
-  async ({ content, project, tool, tags }) => {
+  async ({ content, title, type, topic_key, scope, project, tool, tags, session_id }) => {
     try {
-      const res = await storeMemory({ content, project, tool, tags })
+      const res = await storeMemory({ content, title, type, topic_key, scope, project, tool, tags, session_id })
+      const label = title ? `"${title}"` : `id: ${res.id}`
       return {
-        content: [{ type: 'text', text: `Memory stored (id: ${res.id})` }],
+        content: [{ type: 'text', text: `Memory stored (${label})` }],
       }
     } catch (err) {
       return {
@@ -82,15 +100,17 @@ server.tool(
 // list_memories
 server.tool(
   'list_memories',
-  'List recent memories stored by the team, optionally filtered by project or tool.',
+  'List recent memories stored by the team, optionally filtered by project, type, or scope.',
   {
     project: z.string().optional().describe('Filter by project name'),
+    type:    typeEnum,
+    scope:   z.enum(['project', 'personal']).optional().describe('Filter by scope'),
     tool:    z.string().optional().describe('Filter by tool (e.g. "claude-code", "cursor")'),
     limit:   z.number().int().min(1).max(100).optional().describe('Max results (default: 20)'),
   },
-  async ({ project, tool, limit }) => {
+  async ({ project, type, scope, tool, limit }) => {
     try {
-      const memories = await listMemories({ project, tool, limit: limit ?? 20 })
+      const memories = await listMemories({ project, type, scope, tool, limit: limit ?? 20 })
       const text = memories.length === 0
         ? 'No memories found.'
         : `${memories.length} recent memory(ies):\n\n${formatList(memories)}`
