@@ -65,6 +65,31 @@ if (!apiKey.trim()) {
   warn('No API key provided — you can set NEXUSMIND_API_KEY later and re-run setup.')
 }
 
+// 0. Clean up stale hooks from previous installs
+function isNexusmindAbsoluteHook(entry: Record<string, unknown>): boolean {
+  const cmds: string[] = []
+  if (typeof entry.command === 'string') cmds.push(entry.command)
+  for (const h of (entry.hooks ?? []) as Array<{ command?: string }>) {
+    if (h.command) cmds.push(h.command)
+  }
+  return cmds.some(c => c.includes('nexusmind-mcp/plugin') || c.includes('nexusmind/plugin'))
+}
+
+const staleSettings = readJson(SETTINGS_PATH)
+const staleHooks = (staleSettings.hooks as Record<string, unknown[]>) ?? {}
+let cleaned = false
+for (const event of Object.keys(staleHooks)) {
+  const before = staleHooks[event].length
+  staleHooks[event] = (staleHooks[event] as Array<Record<string, unknown>>).filter(e => !isNexusmindAbsoluteHook(e))
+  if (staleHooks[event].length !== before) cleaned = true
+  if (staleHooks[event].length === 0) delete staleHooks[event]
+}
+if (cleaned) {
+  staleSettings.hooks = staleHooks
+  writeJson(SETTINGS_PATH, staleSettings)
+  info('Removed stale nexusmind hooks from previous install')
+}
+
 // 1. Write MCP server to ~/.claude.json (user MCPs)
 const claudeJson = readJson(CLAUDE_JSON_PATH)
 const mcpServers = (claudeJson.mcpServers as Record<string, unknown>) ?? {}
