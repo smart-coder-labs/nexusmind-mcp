@@ -124,6 +124,86 @@ server.tool(
   }
 )
 
+// get_context — returns team memories formatted as a context block for Cursor
+// rules, notepads, or any tool that injects context at session start.
+server.tool(
+  'get_context',
+  'Get team context as a formatted block for Cursor rules or notepads. Fetches recent memories grouped by type — ready to paste into .cursor/rules/ or a Cursor notepad.',
+  {
+    project: z.string().optional().describe('Project to fetch context for. Omit for all projects.'),
+    limit:   z.number().int().min(1).max(100).optional().describe('Max memories to include (default: 40)'),
+  },
+  async ({ project, limit }) => {
+    try {
+      const memories = await listMemories({ project, limit: limit ?? 40 })
+
+      if (memories.length === 0) {
+        return { content: [{ type: 'text', text: 'No team context found.' }] }
+      }
+
+      // Group by type
+      const groups: Record<string, typeof memories> = {}
+      for (const m of memories) {
+        const key = m.type ?? 'general'
+        groups[key] = groups[key] ?? []
+        groups[key].push(m)
+      }
+
+      const TYPE_LABELS: Record<string, string> = {
+        architecture:    'Architecture & Design',
+        decision:        'Decisions',
+        convention:      'Conventions',
+        pattern:         'Patterns',
+        bugfix:          'Bugs & Fixes',
+        discovery:       'Discoveries',
+        config:          'Configuration',
+        preference:      'Preferences',
+        feature:         'Features',
+        refactoring:     'Refactoring',
+        session_summary: 'Session Summaries',
+        general:         'General',
+      }
+
+      const PRIORITY_ORDER = [
+        'architecture', 'decision', 'convention', 'pattern',
+        'bugfix', 'discovery', 'config', 'feature', 'preference',
+        'refactoring', 'session_summary', 'general',
+      ]
+
+      const sortedKeys = [
+        ...PRIORITY_ORDER.filter(k => groups[k]),
+        ...Object.keys(groups).filter(k => !PRIORITY_ORDER.includes(k)),
+      ]
+
+      const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      const projectLabel = project ? ` — ${project}` : ''
+
+      const lines: string[] = [
+        `## NexusMind Team Context${projectLabel}`,
+        `> Last updated: ${date} · ${memories.length} memories`,
+        '',
+      ]
+
+      for (const key of sortedKeys) {
+        const label = TYPE_LABELS[key] ?? key
+        lines.push(`### ${label}`)
+        for (const m of groups[key]) {
+          const entry = m.title ?? m.content.split('\n')[0].slice(0, 120)
+          lines.push(`- ${entry}`)
+        }
+        lines.push('')
+      }
+
+      return { content: [{ type: 'text', text: lines.join('\n') }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
 // ── Start ────────────────────────────────────────────────────────────────────
 
 const transport = new StdioServerTransport()
