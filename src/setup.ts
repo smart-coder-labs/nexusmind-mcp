@@ -140,11 +140,9 @@ function installCursor(apiKey: string, baseUrl: string, scope: 'global' | 'proje
   writeJson(configPath, existing)
   success(`MCP server → ${configPath}`)
 
-  if (scope === 'project') {
-    // Remind to gitignore the file if it has a real key
-    if (apiKey) {
-      warn(`.cursor/mcp.json contains your API key — add it to .gitignore if this is a shared repo`)
-    }
+  if (scope === 'project' && apiKey) {
+    warn(`Security note: your API key is stored in plain text in .cursor/mcp.json.`)
+    warn(`If this file is shared or committed to git, rotate the key in NexusMind → Admin → Users.`)
   }
 }
 
