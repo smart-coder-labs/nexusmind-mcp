@@ -167,11 +167,26 @@ log(`${c.dim}──────────────────────�
 const rl = readline.createInterface({ input, output })
 
 // API key + URL
-let apiKey  = process.env.NEXUSMIND_API_KEY  ?? ''
-let baseUrl = process.env.NEXUSMIND_BASE_URL ?? ''
+const envKey = process.env.NEXUSMIND_API_KEY  ?? ''
+const envUrl = process.env.NEXUSMIND_BASE_URL ?? ''
 
-if (!apiKey)  apiKey  = (await rl.question('NexusMind API key (nm_…): ')).trim()
-if (!baseUrl) baseUrl = (await rl.question('Backend URL [http://localhost:8080]: ')).trim() || 'http://localhost:8080'
+let apiKey: string
+let baseUrl: string
+
+if (envKey) {
+  const masked = envKey.length > 8 ? envKey.slice(0, 6) + '…' + envKey.slice(-4) : '***'
+  const answer = (await rl.question(`NexusMind API key [${masked}]: `)).trim()
+  apiKey = answer || envKey
+} else {
+  apiKey = (await rl.question('NexusMind API key (nm_…): ')).trim()
+}
+
+if (envUrl) {
+  const answer = (await rl.question(`Backend URL [${envUrl}]: `)).trim()
+  baseUrl = answer || envUrl
+} else {
+  baseUrl = (await rl.question('Backend URL [http://localhost:8080]: ')).trim() || 'http://localhost:8080'
+}
 
 if (!apiKey) {
   warn('No API key provided — you can set NEXUSMIND_API_KEY and re-run setup.')
