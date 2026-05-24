@@ -54,14 +54,32 @@ function writeJson(path: string, data: Record<string, unknown>) {
   writeFileSync(path, JSON.stringify(data, null, 2) + '\n')
 }
 
-function mcpEntry(apiKey: string, baseUrl: string) {
+function mcpEntry() {
   return {
     command: 'npx',
     args: ['-y', '@smart-coder-labs/nexusmind-mcp'],
     env: {
-      NEXUSMIND_API_KEY: apiKey,
-      NEXUSMIND_BASE_URL: baseUrl,
+      NEXUSMIND_API_KEY: '${NEXUSMIND_API_KEY}',
+      NEXUSMIND_BASE_URL: '${NEXUSMIND_BASE_URL}',
     },
+  }
+}
+
+function writeShellEnv(apiKey: string, baseUrl: string) {
+  for (const rc of [join(HOME, '.zshrc'), join(HOME, '.bashrc')]) {
+    if (!existsSync(rc)) continue
+    const text = readFileSync(rc, 'utf8')
+    const lines: string[] = []
+    if (apiKey && !text.includes('NEXUSMIND_API_KEY')) {
+      lines.push(`export NEXUSMIND_API_KEY="${apiKey}"`)
+    }
+    if (!text.includes('NEXUSMIND_BASE_URL')) {
+      lines.push(`export NEXUSMIND_BASE_URL="${baseUrl}"`)
+    }
+    if (lines.length) {
+      writeFileSync(rc, text + `\n# NexusMind\n${lines.join('\n')}\n`)
+      success(`Env vars → ${rc}`)
+    }
   }
 }
 
@@ -94,7 +112,7 @@ function installClaudeCode(apiKey: string, baseUrl: string) {
   // Write MCP entry to ~/.claude.json
   const claudeJson = readJson(CLAUDE_JSON_PATH)
   const mcpServers = (claudeJson.mcpServers as Record<string, unknown>) ?? {}
-  mcpServers['nexusmind'] = mcpEntry(apiKey, baseUrl)
+  mcpServers['nexusmind'] = mcpEntry()
   claudeJson.mcpServers = mcpServers
   writeJson(CLAUDE_JSON_PATH, claudeJson)
   success(`MCP server → ${CLAUDE_JSON_PATH}`)
@@ -110,22 +128,7 @@ function installClaudeCode(apiKey: string, baseUrl: string) {
   writeJson(CLAUDE_SETTINGS, s)
   success(`Plugin registered → github.com/${GITHUB_REPO}`)
 
-  // Persist env vars to shell rc files
-  for (const rc of [join(HOME, '.zshrc'), join(HOME, '.bashrc')]) {
-    if (!existsSync(rc)) continue
-    const text = readFileSync(rc, 'utf8')
-    const lines: string[] = []
-    if (apiKey && !text.includes('NEXUSMIND_API_KEY')) {
-      lines.push(`export NEXUSMIND_API_KEY="${apiKey}"`)
-    }
-    if (!text.includes('NEXUSMIND_BASE_URL')) {
-      lines.push(`export NEXUSMIND_BASE_URL="${baseUrl}"`)
-    }
-    if (lines.length) {
-      writeFileSync(rc, text + `\n# NexusMind\n${lines.join('\n')}\n`)
-      success(`Env vars → ${rc}`)
-    }
-  }
+  writeShellEnv(apiKey, baseUrl)
 }
 
 function installCursor(apiKey: string, baseUrl: string, scope: 'global' | 'project') {
@@ -135,15 +138,12 @@ function installCursor(apiKey: string, baseUrl: string, scope: 'global' | 'proje
 
   const existing = readJson(configPath)
   const mcpServers = (existing.mcpServers as Record<string, unknown>) ?? {}
-  mcpServers['nexusmind'] = mcpEntry(apiKey, baseUrl)
+  mcpServers['nexusmind'] = mcpEntry()
   existing.mcpServers = mcpServers
   writeJson(configPath, existing)
   success(`MCP server → ${configPath}`)
 
-  if (scope === 'project' && apiKey) {
-    warn(`Security note: your API key is stored in plain text in .cursor/mcp.json.`)
-    warn(`If this file is shared or committed to git, rotate the key in NexusMind → Admin → Users.`)
-  }
+  writeShellEnv(apiKey, baseUrl)
 }
 
 // ── Prompt helpers ────────────────────────────────────────────────────────────
@@ -235,13 +235,15 @@ log(`${c.bold}${c.green}All done!${c.reset}\n`)
 
 if (doClaude) {
   log(`${c.bold}Claude Code${c.reset}`)
-  log('  • Restart Claude Code (or run: source ~/.zshrc)')
+  log('  • Run: source ~/.zshrc  (or open a new terminal)')
+  log('  • Then restart Claude Code')
   log('  • Tools available: store_memory, search_memory, list_memories, get_context')
   log('')
 }
 if (doCursor) {
   log(`${c.bold}Cursor${c.reset}`)
-  log('  • Restart Cursor after adding mcp.json')
+  log('  • Run: source ~/.zshrc  (or open a new terminal)')
+  log('  • Then restart Cursor')
   log('  • Tools available: store_memory, search_memory, list_memories, get_context')
   if (cursorScope === 'global') {
     log('  • Active for all projects globally')
