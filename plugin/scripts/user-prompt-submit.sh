@@ -1,73 +1,109 @@
 #!/usr/bin/env bash
 # user-prompt-submit.sh — NexusMind Claude Code plugin: UserPromptSubmit hook
-# Outputs a systemMessage to reinforce memory tool usage on first prompt and periodically.
+# Emits a 5-part system message on EVERY prompt with session + project memories
+# and a behavioral mandate. No first-call / periodic gating.
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# Parse stdin JSON
-# ---------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_helpers.sh
+source "${SCRIPT_DIR}/_helpers.sh"
+
+# Parse stdin
 INPUT="$(cat)"
+cwd="$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('cwd',''))" 2>/dev/null || true)"
 
-session_id="$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_id','unknown'))" 2>/dev/null || echo "unknown")"
-
-# ---------------------------------------------------------------------------
-# Guard: nothing to do without an API key
-# ---------------------------------------------------------------------------
+# Guard
 if [[ -z "${NEXUSMIND_API_KEY:-}" ]]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# State file for this session
-# ---------------------------------------------------------------------------
-STATE_FILE="/tmp/nexusmind-session-${session_id}"
-NOW="$(date +%s)"
+NEXUSMIND_BASE_URL="${NEXUSMIND_BASE_URL:-https://nexusmind-backend.fly.dev}"
 
-# ---------------------------------------------------------------------------
-# First call for this session → output initial system message
-# ---------------------------------------------------------------------------
-if [[ ! -f "$STATE_FILE" ]]; then
-  # Create state file with: session_start_time last_reminder_time prompt_count
-  echo "${NOW} ${NOW} 1" > "$STATE_FILE"
-  cat <<'JSON'
-{"systemMessage": "NexusMind memory tools are available. Use store_memory to save decisions, bugs, and discoveries proactively. Use search_memory to look up past context."}
-JSON
-  exit 0
+# Project detection
+if [[ -n "$cwd" ]]; then
+  pushd "$cwd" &>/dev/null || true
+fi
+PROJECT="$(detect_project)"
+if [[ -n "$cwd" ]]; then
+  popd &>/dev/null || true
 fi
 
-# ---------------------------------------------------------------------------
-# Read existing state
-# ---------------------------------------------------------------------------
-read -r SESSION_START LAST_REMINDER PROMPT_COUNT < "$STATE_FILE" 2>/dev/null || {
-  SESSION_START="$NOW"
-  LAST_REMINDER="$NOW"
-  PROMPT_COUNT=0
-}
-
-PROMPT_COUNT=$(( PROMPT_COUNT + 1 ))
-
-SESSION_AGE=$(( NOW - SESSION_START ))      # seconds since session start
-TIME_SINCE_REMINDER=$(( NOW - LAST_REMINDER ))  # seconds since last reminder
-
-# Update state
-echo "${SESSION_START} ${LAST_REMINDER} ${PROMPT_COUNT}" > "$STATE_FILE"
-
-# ---------------------------------------------------------------------------
-# Periodic reminder: 15+ min since last reminder AND session is 5+ min old
-# ---------------------------------------------------------------------------
-FIFTEEN_MIN=900
-FIVE_MIN=300
-
-if (( TIME_SINCE_REMINDER >= FIFTEEN_MIN && SESSION_AGE >= FIVE_MIN )); then
-  # Update last reminder timestamp
-  echo "${SESSION_START} ${NOW} ${PROMPT_COUNT}" > "$STATE_FILE"
-  cat <<'JSON'
-{"systemMessage": "MEMORY REMINDER: Save recent decisions and discoveries to NexusMind with store_memory."}
-JSON
-  exit 0
+# Section 1: last 5 recent memories
+RECENT_BLOCK="(none)"
+RECENT_JSON="$(curl -sf --max-time 5 \
+  -H "Authorization: Bearer ${NEXUSMIND_API_KEY}" \
+  "${NEXUSMIND_BASE_URL}/v1/memory?limit=5" 2>/dev/null || true)"
+if [[ -n "$RECENT_JSON" ]]; then
+  PARSED="$(echo "$RECENT_JSON" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    items = data if isinstance(data, list) else data.get('memories', data.get('items', data.get('data', [])))
+    lines = []
+    for m in items[:5]:
+        t = m.get('type') or 'general'
+        title = m.get('title') or (m.get('content','').split('\n')[0][:120])
+        lines.append(f'- [{t}] {title}')
+    print('\n'.join(lines))
+except Exception:
+    pass
+" 2>/dev/null || true)"
+  if [[ -n "$PARSED" ]]; then RECENT_BLOCK="$PARSED"; fi
 fi
 
-# ---------------------------------------------------------------------------
-# Nothing to output this time
-# ---------------------------------------------------------------------------
-exit 0
+# Section 2: last 5 project-specific memories (via search)
+PROJECT_BLOCK="(none)"
+PROJECT_JSON="$(curl -sf --max-time 5 \
+  -X POST \
+  -H "Authorization: Bearer ${NEXUSMIND_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"query\": \"${PROJECT}\", \"limit\": 5}" \
+  "${NEXUSMIND_BASE_URL}/v1/memory/search" 2>/dev/null || true)"
+if [[ -n "$PROJECT_JSON" ]]; then
+  PARSED="$(echo "$PROJECT_JSON" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    items = data if isinstance(data, list) else data.get('memories', data.get('items', data.get('data', [])))
+    lines = []
+    for m in items[:5]:
+        t = m.get('type') or 'general'
+        title = m.get('title') or (m.get('content','').split('\n')[0][:120])
+        lines.append(f'- [{t}] {title}')
+    print('\n'.join(lines))
+except Exception:
+    pass
+" 2>/dev/null || true)"
+  if [[ -n "$PARSED" ]]; then PROJECT_BLOCK="$PARSED"; fi
+fi
+
+# Build the 5-part message
+MESSAGE="$(cat <<EOF
+## NexusMind — Per-Prompt Protocol (project: ${PROJECT})
+
+### 1) Recent session memories
+\`\`\`nexusmind-recent
+${RECENT_BLOCK}
+\`\`\`
+
+### 2) Project-specific memories — ${PROJECT}
+\`\`\`nexusmind-project
+${PROJECT_BLOCK}
+\`\`\`
+
+### 3) MANDATORY behavioral rule
+MANDATORY: call \`search_memory\` with keywords from this message before responding if the message references existing work. Save any decision you make to NexusMind. Do not skip this.
+
+### 4) Save reminder
+After completing any decision, bug fix, or non-obvious discovery, call \`store_memory\` BEFORE moving on.
+
+### 5) Format hint
+When you call \`store_memory\`, always set \`type\`, always set \`title\`, always set \`project\`.
+EOF
+)"
+
+# Emit as a single JSON object via stdout
+python3 -c "
+import json, sys
+print(json.dumps({'systemMessage': sys.argv[1]}))
+" "$MESSAGE"

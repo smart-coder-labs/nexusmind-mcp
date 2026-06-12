@@ -1,28 +1,18 @@
 #!/usr/bin/env bash
 # session-start.sh — NexusMind Claude Code plugin: SessionStart hook
-# Outputs additionalContext for Claude Code with the NexusMind active protocol.
+# Emits additionalContext with project search + recency + full protocol body.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./_helpers.sh
 source "${SCRIPT_DIR}/_helpers.sh"
 
-# ---------------------------------------------------------------------------
-# Parse stdin JSON (Claude Code passes hook payload via stdin)
-# ---------------------------------------------------------------------------
 INPUT="$(cat)"
-
-session_id="$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null || true)"
 cwd="$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('cwd',''))" 2>/dev/null || true)"
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
 NEXUSMIND_BASE_URL="${NEXUSMIND_BASE_URL:-https://nexusmind-backend.fly.dev}"
 
-# ---------------------------------------------------------------------------
-# Guard: API key required
-# ---------------------------------------------------------------------------
+# Guard: API key
 if [[ -z "${NEXUSMIND_API_KEY:-}" ]]; then
   cat <<'EOF'
 <!-- NexusMind NOT CONNECTED: NEXUSMIND_API_KEY is not set. Memory tools will not be available.
@@ -32,9 +22,7 @@ EOF
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Guard: backend health check
-# ---------------------------------------------------------------------------
+# Guard: backend health
 if ! curl -sf --max-time 5 "${NEXUSMIND_BASE_URL}/v1/health" &>/dev/null; then
   cat <<'EOF'
 <!-- NexusMind NOT CONNECTED: backend is unreachable. Memory tools will not be available.
@@ -43,89 +31,120 @@ EOF
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Detect project
-# ---------------------------------------------------------------------------
+# Project detection
 if [[ -n "$cwd" ]]; then
   pushd "$cwd" &>/dev/null || true
 fi
-
 PROJECT="$(detect_project)"
-
 if [[ -n "$cwd" ]]; then
   popd &>/dev/null || true
 fi
 
-# ---------------------------------------------------------------------------
-# Fetch recent memories
-# ---------------------------------------------------------------------------
-RECENT_MEMORIES=""
-MEMORIES_RESPONSE="$(curl -sf --max-time 10 \
-  -H "Authorization: Bearer ${NEXUSMIND_API_KEY}" \
-  -H "Content-Type: application/json" \
-  "${NEXUSMIND_BASE_URL}/v1/memory?limit=15" 2>/dev/null || true)"
-
-if [[ -n "$MEMORIES_RESPONSE" ]]; then
-  RECENT_MEMORIES="$(echo "$MEMORIES_RESPONSE" | python3 -c "
+format_memories() {
+  python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)
     items = data if isinstance(data, list) else data.get('memories', data.get('items', data.get('data', [])))
     lines = []
-    for m in items[:10]:
-        project = m.get('project', '') or m.get('metadata', {}).get('project', '')
-        tool    = m.get('tool', '') or m.get('metadata', {}).get('tool', '')
-        content = m.get('content', m.get('text', ''))
-        label   = '/'.join(filter(None, [project, tool]))
-        snippet = content[:120].replace('\n', ' ')
-        lines.append(f'- [{label}] {snippet}')
+    for m in items[:int(sys.argv[1])]:
+        t = (m.get('type') or 'general')
+        title = m.get('title') or (m.get('content','').split('\n')[0][:120].replace('\n',' '))
+        lines.append(f'- [{t}] {title}')
     print('\n'.join(lines))
 except Exception:
     pass
-" 2>/dev/null || true)"
+" "$1"
+}
+
+# Project-specific search
+PROJECT_BLOCK=""
+PROJECT_JSON="$(curl -sf --max-time 8 \
+  -X POST \
+  -H "Authorization: Bearer ${NEXUSMIND_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"query\": \"${PROJECT}\", \"limit\": 15}" \
+  "${NEXUSMIND_BASE_URL}/v1/memory/search" 2>/dev/null || true)"
+if [[ -n "$PROJECT_JSON" ]]; then
+  PROJECT_BLOCK="$(echo "$PROJECT_JSON" | format_memories 15)"
 fi
 
-# ---------------------------------------------------------------------------
-# Output additionalContext
-# ---------------------------------------------------------------------------
+# Recency list
+RECENT_BLOCK=""
+RECENT_JSON="$(curl -sf --max-time 8 \
+  -H "Authorization: Bearer ${NEXUSMIND_API_KEY}" \
+  "${NEXUSMIND_BASE_URL}/v1/memory?limit=15" 2>/dev/null || true)"
+if [[ -n "$RECENT_JSON" ]]; then
+  RECENT_BLOCK="$(echo "$RECENT_JSON" | format_memories 10)"
+fi
+
+# Full protocol body
 cat <<PROTOCOL
-## NexusMind — ACTIVE PROTOCOL
+## NexusMind — ACTIVE PROTOCOL (project: ${PROJECT})
 
-You have NexusMind memory tools available. This protocol is MANDATORY and ALWAYS ACTIVE for this project.
+NexusMind is the single source of truth for this codebase. Before guessing, check it. Before finishing, save to it.
 
-**Project detected**: ${PROJECT}
-
-### CORE TOOLS
+### Tools available
 store_memory — save decisions, bugs, discoveries, conventions PROACTIVELY (do not wait to be asked)
-search_memory — find past decisions or context
-list_memories — browse recent memories
+search_memory — first action on any prompt that references prior work
+list_memories — utility browse
+get_context — bootstrap a significant session
+get_memory — full untruncated content by id (previews are not enough)
+delete_memory — only when the user explicitly asks; requires confirm: true
 
 ### PROACTIVE SAVE RULE
 Call store_memory IMMEDIATELY after ANY decision, bug fix, discovery, or convention — not just when asked.
 Always pass tool="claude-code" and project="${PROJECT}".
 
+ALWAYS set \`type\` — pick the closest match:
+- architecture — design decisions, patterns, system structure
+- bugfix — bug fixes (include root cause)
+- decision — explicit choices made (library, approach, tradeoff)
+- discovery — non-obvious findings, gotchas, edge cases
+- config — environment, tooling, infrastructure changes
+- pattern — naming conventions, code patterns, team standards
+- feedback — user corrections or confirmations of your approach
+- preference — user style or workflow preferences
+- session_summary — end-of-session summary
+- feature — completed feature implementations
+- refactoring — structural code changes without behavior change
+
+ALWAYS provide \`title\` — short (5-10 word) searchable title.
+Use \`topic_key\` for evolving topics — same key updates existing memory instead of creating a duplicate.
+
 ### WHEN TO SEARCH
-- User's first message references a feature or problem → search_memory with keywords
+- User's FIRST message references a feature or problem → search_memory with keywords BEFORE responding
 - Starting work on something that might have been done before → search_memory
 - User asks to recall anything → search_memory
+- About to make a non-trivial decision → search_memory first
 
 ### SESSION CLOSE (MANDATORY)
-Before saying "done", call store_memory with:
+Before saying "done", call store_memory with type="session_summary":
 - What was accomplished
 - Key decisions and why
 - Files changed
 - Next steps
 
 This is NOT optional. If you skip this, the next session starts blind.
+
+### AFTER COMPACTION
+1. IMMEDIATELY call store_memory with type="session_summary" and the compacted content.
+2. Call search_memory(query: "${PROJECT}") to recover broader context.
+3. Only THEN continue working.
 PROTOCOL
 
-# ---------------------------------------------------------------------------
-# Append recent memories if available
-# ---------------------------------------------------------------------------
-if [[ -n "$RECENT_MEMORIES" ]]; then
-  cat <<MEMORIES
+if [[ -n "$PROJECT_BLOCK" ]]; then
+  cat <<EOF
+
+### Project Memories — ${PROJECT}
+${PROJECT_BLOCK}
+EOF
+fi
+
+if [[ -n "$RECENT_BLOCK" ]]; then
+  cat <<EOF
 
 ### Recent Team Memories (last 10)
-${RECENT_MEMORIES}
-MEMORIES
+${RECENT_BLOCK}
+EOF
 fi

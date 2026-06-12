@@ -7,7 +7,7 @@ if (process.argv[2] === 'setup') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory } from './client.js'
 import type { Memory } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ const typeEnum = z.enum(MEMORY_TYPES).optional().describe(
 // store_memory
 server.tool(
   'store_memory',
-  'Store a memory, decision, or piece of context for later retrieval by the team.',
+  'ALWAYS call immediately after ANY decision, bug fix, convention, or non-obvious discovery — do NOT wait to be asked. Mandatory in practice: title (verb + what), type (architecture | bugfix | decision | discovery | config | pattern | feedback | preference | project | session_summary | feature | refactoring | manual), and project. Call this BEFORE moving to the next task.',
   {
     content:   z.string().describe('Full memory content (decision rationale, bug root cause, discovery, etc.)'),
     title:     z.string().optional().describe('Short searchable title (e.g. "Fixed N+1 query in UserList")'),
@@ -76,7 +76,7 @@ server.tool(
 // search_memory
 server.tool(
   'search_memory',
-  'Search past memories and decisions stored by the team using full-text search.',
+  "Call BEFORE starting any work that might have been done before. This is your FIRST action when a user's message references a project, feature, bug, or module you don't already have context on. If unsure whether to search — search. Pass keywords from the user's message as query.",
   {
     query: z.string().describe('What to search for (e.g. "authentication", "database connection pool")'),
     limit: z.number().int().min(1).max(50).optional().describe('Max results to return (default: 10)'),
@@ -100,7 +100,7 @@ server.tool(
 // list_memories
 server.tool(
   'list_memories',
-  'List recent memories stored by the team, optionally filtered by project, type, or scope.',
+  'Utility browse for recent memories, optionally filtered by project, type, or scope. Prefer search_memory when you have keywords. Use list_memories only when exploring the project or auditing recent activity.',
   {
     project: z.string().optional().describe('Filter by project name'),
     type:    typeEnum,
@@ -128,7 +128,7 @@ server.tool(
 // rules, notepads, or any tool that injects context at session start.
 server.tool(
   'get_context',
-  'Get team context as a formatted block for Cursor rules or notepads. Fetches recent memories grouped by type — ready to paste into .cursor/rules/ or a Cursor notepad.',
+  'Call at the START of every session that involves significant work. Returns all team knowledge grouped by type — architecture, decisions, patterns, bugs fixed, discoveries. This is the canonical bootstrap for nexus-mind work; do not skip it on substantial sessions.',
   {
     project: z.string().optional().describe('Project to fetch context for. Omit for all projects.'),
     limit:   z.number().int().min(1).max(100).optional().describe('Max memories to include (default: 40)'),
@@ -195,6 +195,74 @@ server.tool(
       }
 
       return { content: [{ type: 'text', text: lines.join('\n') }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// get_memory — full untruncated content by id
+server.tool(
+  'get_memory',
+  'Fetch FULL untruncated content for a single memory by id. search_memory and list_memories return previews (often 120-300 chars); when you need to act on or quote the full record, call get_memory(id). Use the id returned by search_memory.',
+  {
+    id: z.string().describe('The memory id (returned by search_memory or list_memories)'),
+  },
+  async ({ id }) => {
+    try {
+      const m = await getMemoryById(id)
+      const date = new Date(m.created_at).toLocaleString()
+      const tagsLine = m.tags.length > 0 ? `Tags: ${m.tags.join(', ')}\n` : ''
+      const topicLine = m.topic_key ? `Topic key: ${m.topic_key}\n` : ''
+      const text = [
+        `id: ${m.id}`,
+        `title: ${m.title ?? '(untitled)'}`,
+        `type: ${m.type ?? '(none)'}`,
+        `project: ${m.project || '(no project)'}`,
+        `tool: ${m.tool}`,
+        `scope: ${m.scope}`,
+        `${tagsLine}${topicLine}created: ${date}`,
+        `revision: ${m.revision_count}`,
+        '',
+        '--- content ---',
+        m.content,
+      ].join('\n')
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// delete_memory — hard delete with explicit confirmation
+server.tool(
+  'delete_memory',
+  'Delete a memory permanently. The USER must request deletion explicitly — DO NOT delete autonomously. Required: confirm: true. Without confirm: true this tool refuses and returns an error. Backend hard-deletes; there is no undo. Use only for stale, incorrect, or explicitly retired memories.',
+  {
+    id:      z.string().describe('The memory id to delete'),
+    confirm: z.boolean().describe('Must be true to perform the deletion. Without this, the tool refuses.'),
+  },
+  async ({ id, confirm }) => {
+    if (confirm !== true) {
+      return {
+        content: [{
+          type: 'text',
+          text: 'Refused: delete_memory requires confirm: true. The user must request deletion explicitly. No HTTP request was made.',
+        }],
+        isError: true,
+      }
+    }
+    try {
+      await deleteMemory(id)
+      return {
+        content: [{ type: 'text', text: `Memory deleted (id: ${id})` }],
+      }
     } catch (err) {
       return {
         content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],

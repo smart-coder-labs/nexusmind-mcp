@@ -125,3 +125,11 @@ export function listMemories(params: {
   if (params.limit)   qs.set('limit',   String(params.limit))
   return request(`/v1/memory?${qs}`)
 }
+
+export function getMemoryById(id: string): Promise<Memory> {
+  return request<Memory>(`/v1/memory/${encodeURIComponent(id)}`, { method: 'GET' })
+}
+
+export function deleteMemory(id: string): Promise<void> {
+  return request<void>(`/v1/memory/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}

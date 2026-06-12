@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
 # subagent-stop.sh — NexusMind Claude Code plugin: SubagentStop hook (async)
-# Passively captures subagent output as a memory entry for team context.
+# Quality-gated passive capture: only stores outputs that contain decision-like
+# keywords. Both Claude plugin repos ship this file byte-identical.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./_helpers.sh
 source "${SCRIPT_DIR}/_helpers.sh"
 
-# ---------------------------------------------------------------------------
-# Guard: nothing to do without an API key
-# ---------------------------------------------------------------------------
 if [[ -z "${NEXUSMIND_API_KEY:-}" ]]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Parse stdin JSON
-# ---------------------------------------------------------------------------
 INPUT="$(cat)"
-
 subagent_output="$(echo "$INPUT" | python3 -c "
 import sys, json
 try:
@@ -28,39 +22,32 @@ except Exception:
     pass
 " 2>/dev/null || true)"
 
-# Skip if output is empty or very short (not worth storing)
-if [[ -z "$subagent_output" || "${#subagent_output}" -lt 50 ]]; then
+# Skip very short outputs
+if [[ -z "$subagent_output" || "${#subagent_output}" -lt 100 ]]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-NEXUSMIND_BASE_URL="${NEXUSMIND_BASE_URL:-https://nexusmind-backend.fly.dev}"
+# Quality gate: must contain at least one decision-like keyword
+KEYWORD_RE='decided|decision|fixed|error|warning|convention|architecture|discovered|discovery|issue|solution|implemented|changed|added|removed|refactored|pattern|config|gotcha|caveat|note|important'
+if ! echo "$subagent_output" | grep -iEq "$KEYWORD_RE"; then
+  exit 0
+fi
 
-# ---------------------------------------------------------------------------
-# Detect project
-# ---------------------------------------------------------------------------
+NEXUSMIND_BASE_URL="${NEXUSMIND_BASE_URL:-https://nexusmind-backend.fly.dev}"
 PROJECT="$(detect_project)"
 
-# ---------------------------------------------------------------------------
-# Fire-and-forget: POST to /v1/memory/store
-# ---------------------------------------------------------------------------
 PAYLOAD="$(python3 -c "
 import json, sys
 content = sys.argv[1]
 project = sys.argv[2]
-# Truncate to avoid oversized payloads
 if len(content) > 2000:
     content = content[:2000] + '... [truncated]'
 print(json.dumps({
+    'title': 'Subagent: ' + project,
     'content': content,
+    'type': 'discovery',
     'tool': 'claude-code-subagent',
     'project': project,
-    'metadata': {
-        'source': 'subagent-stop-hook',
-        'passive_capture': True
-    }
 }))
 " "$subagent_output" "$PROJECT" 2>/dev/null || true)"
 
