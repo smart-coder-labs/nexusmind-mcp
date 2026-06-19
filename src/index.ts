@@ -7,8 +7,8 @@ if (process.argv[2] === 'setup') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory } from './client.js'
-import type { Memory } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, indexProject, searchCode, getSymbolContext } from './client.js'
+import type { Memory, CodeSearchResult, CodeChunk } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -263,6 +263,119 @@ server.tool(
       return {
         content: [{ type: 'text', text: `Memory deleted (id: ${id})` }],
       }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ── Code Index Helpers ───────────────────────────────────────────────────────
+
+function formatCodeResult(r: CodeSearchResult, index: number): string {
+  const symbol = r.symbol ? ` — ${r.symbol}` : ''
+  const kind   = r.kind ? ` (${r.kind})` : ''
+  const score  = r.score.toFixed(3)
+  return [
+    `[${index + 1}] ${r.file_path}${symbol}${kind} · score: ${score}`,
+    `    lines ${r.start_line}–${r.end_line}`,
+    `    ${r.content.trim().split('\n').slice(0, 4).join('\n    ')}`,
+  ].join('\n')
+}
+
+function formatCodeChunk(c: CodeChunk, index: number): string {
+  const symbol = c.symbol ? ` — ${c.symbol}` : ''
+  const kind   = c.kind ? ` (${c.kind})` : ''
+  return [
+    `[${index + 1}] ${c.file_path}${symbol}${kind}`,
+    `    lines ${c.start_line}–${c.end_line}`,
+    `    ${c.content.trim().split('\n').slice(0, 4).join('\n    ')}`,
+  ].join('\n')
+}
+
+// index_project
+server.tool(
+  'index_project',
+  'Call BEFORE any semantic code search on a project that has not been indexed yet, or when code has changed significantly. Walks the project root, chunks source files by symbol, embeds them, and persists to the code index. Takes the absolute path to the project root.',
+  {
+    project:    z.string().describe('Logical project name used as the search scope key (e.g. "nexusmind-backend")'),
+    root_path:  z.string().describe('Absolute path to the project root directory to index'),
+    extensions: z.array(z.string()).optional().describe('File extensions to include (e.g. [".ts", ".rs"]). Defaults to common code extensions.'),
+  },
+  async ({ project, root_path, extensions }) => {
+    try {
+      const res = await indexProject({ project, root_path, extensions })
+      return {
+        content: [{
+          type: 'text',
+          text: `Project "${res.project}" indexed successfully.\nStatus: ${res.status}\nFiles indexed: ${res.file_count}\nChunks created: ${res.chunk_count}`,
+        }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// search_code
+server.tool(
+  'search_code',
+  'Primary tool for understanding a codebase semantically. Call to find where something is defined, how a pattern is implemented, or what code handles a specific concern — WITHOUT reading files manually. Requires the project to be indexed first via index_project.',
+  {
+    query:   z.string().describe('Natural language or code description of what to find (e.g. "user authentication logic", "database connection pool setup")'),
+    project: z.string().describe('Project key to search within — must match the key used in index_project'),
+    limit:   z.number().int().min(1).max(20).optional().describe('Max results to return (default: 10, max: 20)'),
+  },
+  async ({ query, project, limit }) => {
+    try {
+      const results = await searchCode({ query, project, limit: limit ?? 10 })
+      if (results.length === 0) {
+        return { content: [{ type: 'text', text: `No code chunks found for query: "${query}" in project "${project}".` }] }
+      }
+      const text = [
+        `Found ${results.length} result(s) for "${query}" in project "${project}":`,
+        '',
+        ...results.map(formatCodeResult),
+      ].join('\n')
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// get_symbol_context
+server.tool(
+  'get_symbol_context',
+  'After search_code identifies a symbol, call this to get the full context of that symbol and its immediate neighbors in the file. Returns the target chunk plus up to 2 adjacent chunks (one before, one after) in file order.',
+  {
+    project:   z.string().describe('Project key — must match the key used in index_project'),
+    file_path: z.string().describe('File path as returned by search_code (e.g. "src/auth.rs")'),
+    symbol:    z.string().describe('Symbol name to look up (e.g. "authenticate_user", "UserService")'),
+  },
+  async ({ project, file_path, symbol }) => {
+    try {
+      const chunks = await getSymbolContext({ project, file_path, symbol })
+      if (chunks.length === 0) {
+        return {
+          content: [{ type: 'text', text: `Symbol "${symbol}" not found in ${file_path} (project: "${project}").` }],
+          isError: true,
+        }
+      }
+      const text = [
+        `Context for symbol "${symbol}" in ${file_path} (project: "${project}"):`,
+        '',
+        ...chunks.map(formatCodeChunk),
+      ].join('\n')
+      return { content: [{ type: 'text', text }] }
     } catch (err) {
       return {
         content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],

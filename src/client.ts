@@ -133,3 +133,80 @@ export function getMemoryById(id: string): Promise<Memory> {
 export function deleteMemory(id: string): Promise<void> {
   return request<void>(`/v1/memory/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
+
+// ── Code Index Types ─────────────────────────────────────────────────────────
+
+export interface IndexProjectInput {
+  project: string
+  root_path: string
+  extensions?: string[]
+}
+
+export interface IndexProjectResponse {
+  status: string
+  project: string
+  file_count: number
+  chunk_count: number
+}
+
+export interface SearchCodeInput {
+  query: string
+  project: string
+  limit?: number
+}
+
+export interface CodeSearchResult {
+  project: string
+  file_path: string
+  symbol?: string
+  kind?: string
+  start_line: number
+  end_line: number
+  content: string
+  score: number
+}
+
+export interface GetSymbolContextInput {
+  project: string
+  file_path: string
+  symbol: string
+}
+
+export interface CodeChunk {
+  project: string
+  file_path: string
+  symbol?: string
+  kind?: string
+  start_line: number
+  end_line: number
+  content: string
+}
+
+// ── Code Index API calls ─────────────────────────────────────────────────────
+
+export function indexProject(input: IndexProjectInput): Promise<IndexProjectResponse> {
+  const body: Record<string, unknown> = {
+    project:   input.project,
+    root_path: input.root_path,
+  }
+  if (input.extensions) body.extensions = input.extensions
+  return request<IndexProjectResponse>('/v1/code/index', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function searchCode(input: SearchCodeInput): Promise<CodeSearchResult[]> {
+  const body: Record<string, unknown> = {
+    query:   input.query,
+    project: input.project,
+  }
+  if (input.limit !== undefined) body.top_k = input.limit
+  return request<CodeSearchResult[]>('/v1/code/search', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function getSymbolContext(input: GetSymbolContextInput): Promise<CodeChunk[]> {
+  const qs = new URLSearchParams({
+    project:   input.project,
+    file_path: input.file_path,
+    symbol:    input.symbol,
+  })
+  return request<CodeChunk[]>(`/v1/code/context?${qs}`)
+}
