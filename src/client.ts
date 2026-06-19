@@ -156,10 +156,9 @@ export interface SearchCodeInput {
 }
 
 export interface CodeSearchResult {
-  id: string
   project: string
   file_path: string
-  symbol_name?: string
+  symbol?: string
   kind?: string
   start_line: number
   end_line: number
@@ -174,10 +173,9 @@ export interface GetSymbolContextInput {
 }
 
 export interface CodeChunk {
-  id: string
   project: string
   file_path: string
-  symbol_name?: string
+  symbol?: string
   kind?: string
   start_line: number
   end_line: number
@@ -200,7 +198,7 @@ export function searchCode(input: SearchCodeInput): Promise<CodeSearchResult[]> 
     query:   input.query,
     project: input.project,
   }
-  if (input.limit !== undefined) body.limit = input.limit
+  if (input.limit !== undefined) body.top_k = input.limit
   return request<CodeSearchResult[]>('/v1/code/search', { method: 'POST', body: JSON.stringify(body) })
 }
 

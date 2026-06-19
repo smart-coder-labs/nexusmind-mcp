@@ -275,7 +275,7 @@ server.tool(
 // ── Code Index Helpers ───────────────────────────────────────────────────────
 
 function formatCodeResult(r: CodeSearchResult, index: number): string {
-  const symbol = r.symbol_name ? ` — ${r.symbol_name}` : ''
+  const symbol = r.symbol ? ` — ${r.symbol}` : ''
   const kind   = r.kind ? ` (${r.kind})` : ''
   const score  = r.score.toFixed(3)
   return [
@@ -286,7 +286,7 @@ function formatCodeResult(r: CodeSearchResult, index: number): string {
 }
 
 function formatCodeChunk(c: CodeChunk, index: number): string {
-  const symbol = c.symbol_name ? ` — ${c.symbol_name}` : ''
+  const symbol = c.symbol ? ` — ${c.symbol}` : ''
   const kind   = c.kind ? ` (${c.kind})` : ''
   return [
     `[${index + 1}] ${c.file_path}${symbol}${kind}`,
