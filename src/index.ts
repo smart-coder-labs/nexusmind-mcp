@@ -2755,7 +2755,7 @@ server.tool(
 // onboard_agent
 server.tool(
   'onboard_agent',
-  'Complete onboarding for a new AI agent: saves an agent memory, fetches conventions, and returns an orientation brief.',
+  'Complete onboarding for a new AI agent: saves an agent memory, fetches conventions, projects, stats, and org settings in parallel, and returns a comprehensive orientation brief.',
   {
     agent_name: z.string().describe('Name of the agent being onboarded (e.g. "cursor", "claude-code", "my-custom-agent")'),
     project:    z.string().optional().describe('Optional project the agent will work on'),
@@ -2771,11 +2771,63 @@ server.tool(
         project,
       })
 
-      // 2. Get the agent dashboard
-      const dashboard = await buildAgentDashboard()
+      // 2. Fetch everything in parallel
+      const [conventions, memories, projects, stats, org] = await Promise.all([
+        listConventions({ limit: 50 } as any).catch(() => []),
+        searchMemories({ query: '', limit: 10 }).catch(() => []),
+        listProjects({}).catch(() => []),
+        getStats().catch(() => ({})),
+        getOrgSettings().catch(() => ({})),
+      ])
+
+      // 3. Build comprehensive onboarding response
+      const conventionLines = (conventions ?? [])
+        .filter((c: any) => !c.archived_at)
+        .sort((a: any, b: any) => (b.weight ?? 100) - (a.weight ?? 100))
+        .slice(0, 20)
+        .map((c: any) => `- [${c.category ?? 'general'}] **${c.title ?? `Convention ${c.id}`}**: ${c.content?.slice(0, 200)}`)
+
+      const memoryLines = (memories ?? [])
+        .slice(0, 5)
+        .map((m: any) => `- ${m.content?.slice(0, 150)} (tags: ${m.tags?.join(', ') || 'none'})`)
+
+      const projectLines = (projects ?? [])
+        .filter((p: any) => !p.is_archived)
+        .map((p: any) => `- **${p.name}**: ${p.description ?? 'No description'} (${p.memory_count ?? 0} memories)`)
+
+      const output = [
+        `# NexusMind Agent Bootstrap`,
+        '',
+        `Welcome, ${agent_name}!`,
+        '',
+        `## Organization: ${(org as any)?.name ?? 'Unknown'}`,
+        (org as any)?.announcement ? `\n> **Announcement**: ${(org as any).announcement}\n` : '',
+        '',
+        `## Stats`,
+        `- Total memories: ${(stats as any)?.total_memories ?? '?'}`,
+        `- Active users: ${(stats as any)?.active_users ?? (stats as any)?.total_users ?? '?'}`,
+        `- Projects: ${projectLines.length}`,
+        `- Conventions: ${conventionLines.length}`,
+        '',
+        '## Team Conventions (follow these — ordered by weight)',
+        conventionLines.length ? conventionLines.join('\n') : '- No conventions set yet',
+        '',
+        '## Projects',
+        projectLines.length ? projectLines.join('\n') : '- No projects yet',
+        '',
+        '## Recent Memories (sample)',
+        memoryLines.length ? memoryLines.join('\n') : '- No memories yet',
+        '',
+        '## Quick Start',
+        '- Use `store_memory` to save important decisions and discoveries',
+        '- Use `search_memory` to find relevant past context',
+        '- Use `get_context` for full project knowledge (grouped by type)',
+        '- Use `check_convention_compliance` to verify your work follows team conventions',
+        '- Use `list_conventions` to see all team conventions with weights',
+      ].join('\n')
 
       return {
-        content: [{ type: 'text', text: `Welcome, ${agent_name}!\n\n${dashboard}` }],
+        content: [{ type: 'text', text: output }],
       }
     } catch (err) {
       return {
