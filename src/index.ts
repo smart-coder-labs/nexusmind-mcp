@@ -3024,6 +3024,42 @@ server.tool(
   }
 )
 
+// export_all_data
+server.tool(
+  'export_all_data',
+  'Export all org data (memories, conventions, projects) as a combined JSON object. Useful for backup or migration.',
+  {
+    include_memories:    z.boolean().optional().describe('Include memories in the export (default: true)'),
+    include_conventions: z.boolean().optional().describe('Include conventions in the export (default: true)'),
+    include_projects:    z.boolean().optional().describe('Include projects in the export (default: true)'),
+  },
+  async (input) => {
+    try {
+      const [memories, conventions, projects] = await Promise.all([
+        input.include_memories    !== false ? listMemories({ limit: 10000 }) : Promise.resolve([]),
+        input.include_conventions !== false ? listConventions(undefined, true) : Promise.resolve([]),
+        input.include_projects    !== false ? listProjects({}) : Promise.resolve([]),
+      ])
+
+      const result = {
+        exported_at:  new Date().toISOString(),
+        memories:     memories     ?? [],
+        conventions:  conventions  ?? [],
+        projects:     projects     ?? [],
+      }
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
 // ── Start ────────────────────────────────────────────────────────────────────
 
 const transport = new StdioServerTransport()
