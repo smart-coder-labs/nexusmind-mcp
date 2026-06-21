@@ -1936,6 +1936,31 @@ server.tool(
   }
 )
 
+// merge_tags
+server.tool(
+  'merge_tags',
+  'Merge tag "source" into "target" — all memories tagged with source get retagged to target, and source is removed. Use get_tag_stats to see available tags before merging.',
+  {
+    source: z.string().describe('The tag to absorb and remove (e.g. "auth")'),
+    target: z.string().describe('The tag to merge into — memories from source will carry this tag (e.g. "authentication")'),
+  },
+  async ({ source, target }) => {
+    try {
+      // The rename endpoint absorbs source into target (retags all memories and removes source)
+      const result = await renameTag(source, target)
+      const count = result.updated ?? 0
+      return {
+        content: [{ type: 'text', text: `Tags merged: "${source}" → "${target}". ${count} memory(ies) retagged. Tag "${source}" has been removed.` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
 // set_announcement
 server.tool(
   'set_announcement',
