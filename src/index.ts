@@ -13,7 +13,7 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listPolicies, createPolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listPolicies, createPolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1706,6 +1706,62 @@ server.tool(
       })
       return {
         content: [{ type: 'text', text: `${roles.length} role(s):\n\n${lines.join('\n\n')}` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// create_role
+server.tool(
+  'create_role',
+  'Create a new role in the organization with a specified set of permissions.',
+  {
+    name:        z.string().describe('Name for the new role (e.g. "viewer", "editor")'),
+    description: z.string().optional().describe('Optional description of what this role allows'),
+    permissions: z.array(z.string()).describe('List of permission strings to grant (e.g. ["memory.read", "memory.write"])'),
+  },
+  async ({ name, description, permissions }) => {
+    try {
+      const role = await createRole({ name, description, permissions })
+      return {
+        content: [{ type: 'text', text: `Role created: "${role.name}" (id: ${role.id})` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// delete_role
+server.tool(
+  'delete_role',
+  'Permanently delete a role by ID. Requires confirm: true. There is no undo — users with this role will lose it.',
+  {
+    role_id: z.string().describe('ID of the role to delete (returned by list_roles)'),
+    confirm: z.boolean().describe('Must be true to perform the deletion. Without this, the tool refuses and makes no HTTP request.'),
+  },
+  async ({ role_id, confirm }) => {
+    if (confirm !== true) {
+      return {
+        content: [{
+          type: 'text',
+          text: 'Refused: delete_role requires confirm: true. No HTTP request was made.',
+        }],
+        isError: true,
+      }
+    }
+    try {
+      await deleteRole(role_id)
+      return {
+        content: [{ type: 'text', text: `Role deleted (id: ${role_id})` }],
       }
     } catch (err) {
       return {

@@ -656,6 +656,23 @@ export function listRoles(): Promise<OrgRole[]> {
   return request<OrgRole[]>('/v1/roles')
 }
 
+export interface CreateRoleInput {
+  name: string
+  description?: string
+  permissions: string[]
+}
+
+export function createRole(data: CreateRoleInput): Promise<OrgRole> {
+  return request<OrgRole>('/v1/roles', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteRole(id: string): Promise<void> {
+  return request<void>(`/v1/roles/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
 export function assignUserRole(userId: string, role: string): Promise<void> {
   return request<void>(`/v1/admin/users/${encodeURIComponent(userId)}`, {
     method: 'PATCH',
