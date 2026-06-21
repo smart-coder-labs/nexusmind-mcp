@@ -5,7 +5,8 @@
   "type": "module",
   "bin": {
     "nexusmind-mcp": "dist/index.js",
-    "nexusmind-setup": "dist/setup.js"
+    "nexusmind-setup": "dist/setup.js",
+    "nexusmind": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
