@@ -1024,6 +1024,21 @@ export function updateMemoryNote(id: string, note: string): Promise<void> {
   })
 }
 
+// ── Schedule Memory Delete ───────────────────────────────────────────────────
+
+export function scheduleMemoryDelete(memoryId: string, deleteAt: string): Promise<void> {
+  return request<void>(`/v1/admin/memories/${encodeURIComponent(memoryId)}/schedule-delete`, {
+    method: 'PATCH',
+    body: JSON.stringify({ delete_at: deleteAt }),
+  })
+}
+
+// ── Reindex Code Project ──────────────────────────────────────────────────────
+
+export function reindexProject(projectId: string): Promise<void> {
+  return request<void>(`/v1/code/projects/${encodeURIComponent(projectId)}/reindex`, { method: 'POST' })
+}
+
 // ── Memory Health ─────────────────────────────────────────────────────────────
 
 export interface MemoryHealth {
