@@ -1015,6 +1015,15 @@ export function pinConvention(id: string): Promise<Convention> {
   })
 }
 
+// ── Memory Note ───────────────────────────────────────────────────────────────
+
+export function updateMemoryNote(id: string, note: string): Promise<void> {
+  return request<void>(`/v1/admin/memories/${encodeURIComponent(id)}/note`, {
+    method: 'PATCH',
+    body: JSON.stringify({ note }),
+  })
+}
+
 // ── Memory Health ─────────────────────────────────────────────────────────────
 
 export interface MemoryHealth {
