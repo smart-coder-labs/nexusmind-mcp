@@ -706,6 +706,13 @@ export function createWebhook(data: { url: string; events: string[]; name?: stri
   })
 }
 
+export function updateWebhook(id: string, data: { url?: string; events?: string[]; name?: string }): Promise<Webhook> {
+  return request<Webhook>(`/v1/webhooks/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
 export function deleteWebhook(id: string): Promise<void> {
   return request<void>(`/v1/webhooks/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
