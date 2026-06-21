@@ -625,6 +625,10 @@ export function deleteWebhook(id: string): Promise<void> {
   return request<void>(`/v1/webhooks/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+export function testWebhook(id: string): Promise<unknown> {
+  return request<unknown>(`/v1/webhooks/${encodeURIComponent(id)}/test`, { method: 'POST' })
+}
+
 // ── Org Settings ──────────────────────────────────────────────────────────────
 
 export interface OrgSettings {
