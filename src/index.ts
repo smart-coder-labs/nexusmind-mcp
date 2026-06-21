@@ -2418,6 +2418,50 @@ server.tool(
   }
 )
 
+// quick_health_check
+server.tool(
+  'quick_health_check',
+  'Fast memory health summary: total count, estimated duplicates, stale memories (>30 days old), and untagged memories. Faster than memory_health_check.',
+  {},
+  async () => {
+    try {
+      const memories = await searchMemories({ query: '', limit: 500 })
+      const all = memories ?? []
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+
+      const stale = all.filter((m: any) => new Date(m.updated_at ?? m.created_at) < thirtyDaysAgo)
+      const untagged = all.filter((m: any) => !m.tags?.length)
+
+      // Estimate duplicates: same content first 100 chars
+      const seen = new Set<string>()
+      let dupes = 0
+      all.forEach((m: any) => {
+        const key = (m.content ?? '').slice(0, 100).toLowerCase().trim()
+        if (seen.has(key)) dupes++
+        else seen.add(key)
+      })
+
+      const text = [
+        `## Memory Health (sample of ${all.length})`,
+        `- Stale (>30d): ${stale.length}`,
+        `- Untagged: ${untagged.length}`,
+        `- Estimated duplicates: ${dupes}`,
+        '',
+        dupes > 0 ? '⚠️ Run `find_duplicate_memories` for exact duplicates.' : '✅ No obvious duplicates.',
+        stale.length > 10 ? '⚠️ Many stale memories — consider archiving old ones.' : '✅ Memory freshness looks good.',
+        untagged.length > 10 ? '⚠️ Many untagged memories — use `search_and_tag` to categorize.' : '✅ Tagging coverage looks good.',
+      ].join('\n')
+
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
 // batch_archive_memories
 server.tool(
   'batch_archive_memories',
