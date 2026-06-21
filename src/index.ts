@@ -13,7 +13,7 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -621,6 +621,63 @@ server.tool(
         }),
       ]
       return { content: [{ type: 'text', text: lines.join('\n') }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// get_code_project_files
+server.tool(
+  'get_code_project_files',
+  'List all indexed file paths for a code project. Use to inspect what files are in the search index before running semantic queries.',
+  {
+    project_id: z.string().describe('The numeric ID of the code project (returned by list_code_projects)'),
+  },
+  async ({ project_id }) => {
+    try {
+      const files = await getCodeProjectFiles(project_id)
+      if (files.length === 0) {
+        return { content: [{ type: 'text', text: `No indexed files found for project id: ${project_id}` }] }
+      }
+      return {
+        content: [{ type: 'text', text: `${files.length} indexed file(s) in project ${project_id}:\n\n${files.join('\n')}` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// delete_code_project
+server.tool(
+  'delete_code_project',
+  'Delete a code project and all its indexed data. Requires confirm: true. There is no undo — all chunks and embeddings for the project are permanently removed.',
+  {
+    id:      z.string().describe('The numeric ID of the code project to delete (returned by list_code_projects)'),
+    confirm: z.boolean().describe('Must be true to perform the deletion. Without this, the tool refuses and makes no HTTP request.'),
+  },
+  async ({ id, confirm }) => {
+    if (confirm !== true) {
+      return {
+        content: [{
+          type: 'text',
+          text: 'Refused: delete_code_project requires confirm: true. No HTTP request was made.',
+        }],
+        isError: true,
+      }
+    }
+    try {
+      await deleteCodeProject(id)
+      return {
+        content: [{ type: 'text', text: `Code project deleted (id: ${id})` }],
+      }
     } catch (err) {
       return {
         content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],

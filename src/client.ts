@@ -308,6 +308,14 @@ export function listCodeProjects(input: ListCodeProjectsInput = {}): Promise<Cod
   return request<CodeProject[]>(`/v1/code/projects${qs}`)
 }
 
+export function getCodeProjectFiles(projectId: string): Promise<string[]> {
+  return request<string[]>(`/v1/code/projects/${encodeURIComponent(projectId)}/files`)
+}
+
+export function deleteCodeProject(projectId: string): Promise<void> {
+  return request<void>(`/v1/code/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' })
+}
+
 // ── Bulk Delete Memories ─────────────────────────────────────────────────────
 
 export interface BulkDeleteInput {
