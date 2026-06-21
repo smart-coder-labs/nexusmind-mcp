@@ -397,6 +397,27 @@ export function revokeApiKey(id: string): Promise<void> {
   return request<void>(`/v1/admin/keys/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+export interface CreateOrgKeyRequest {
+  name: string
+  expires_at?: string
+  role?: string
+  description?: string
+}
+
+export interface CreatedOrgKey {
+  id: string | number
+  name: string
+  key: string
+  role?: string
+  expires_at?: string
+  created_at?: string
+  [key: string]: unknown
+}
+
+export function createApiKey(data: CreateOrgKeyRequest): Promise<CreatedOrgKey> {
+  return request<CreatedOrgKey>('/v1/admin/keys', { method: 'POST', body: JSON.stringify(data) })
+}
+
 // ── Audit Log ────────────────────────────────────────────────────────────────
 
 export interface AuditLogEntry {

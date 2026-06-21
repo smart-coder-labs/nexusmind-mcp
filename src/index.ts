@@ -13,7 +13,7 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1280,6 +1280,39 @@ server.tool(
       await revokeApiKey(id)
       return {
         content: [{ type: 'text', text: `API key revoked (id: ${id})` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// create_api_key
+server.tool(
+  'create_api_key',
+  'Create a new API key for programmatic access. Returns the key value (only shown once — save immediately).',
+  {
+    name:        z.string().describe('Name for the API key (e.g. "CI/CD pipeline", "My dev key")'),
+    expires_at:  z.string().optional().describe('Optional expiry date in ISO 8601 format (e.g. "2025-12-31T23:59:59Z")'),
+    role:        z.string().optional().describe('Role to assign to the key (e.g. "admin", "member", "viewer"). Defaults to "member".'),
+    description: z.string().optional().describe('Optional description of what this key is for'),
+  },
+  async ({ name, expires_at, role, description }) => {
+    try {
+      const result = await createApiKey({
+        name,
+        expires_at,
+        role: role ?? 'member',
+        description,
+      })
+      return {
+        content: [{
+          type: 'text',
+          text: `API key created: **${result.name}**\nKey: \`${result.key}\`\n\nSave this — it won't be shown again.`,
+        }],
       }
     } catch (err) {
       return {
