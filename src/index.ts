@@ -1573,6 +1573,50 @@ server.tool(
   }
 )
 
+// bulk_disable_users
+server.tool(
+  'bulk_disable_users',
+  'Disable multiple users at once. Use list_users to find user IDs.',
+  {
+    user_ids: z.array(z.string()).min(1).describe('IDs of the users to disable'),
+  },
+  async ({ user_ids }) => {
+    try {
+      await Promise.all(user_ids.map(id => disableUser(id)))
+      return {
+        content: [{ type: 'text', text: `${user_ids.length} user(s) disabled.` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// bulk_enable_users
+server.tool(
+  'bulk_enable_users',
+  'Re-enable multiple disabled users at once.',
+  {
+    user_ids: z.array(z.string()).min(1).describe('IDs of the users to re-enable'),
+  },
+  async ({ user_ids }) => {
+    try {
+      await Promise.all(user_ids.map(id => enableUser(id)))
+      return {
+        content: [{ type: 'text', text: `${user_ids.length} user(s) enabled.` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
 // list_roles
 server.tool(
   'list_roles',
