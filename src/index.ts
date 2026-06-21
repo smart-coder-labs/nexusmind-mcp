@@ -2034,20 +2034,28 @@ server.tool(
 // get_memory_trends
 server.tool(
   'get_memory_trends',
-  'Get memory creation trends over time. Returns daily counts for charting activity.',
+  'Get memory creation trends over time. Returns daily counts for charting and a weekly summary.',
   {
-    period: z.enum(['7d', '30d', '90d']).optional().describe('Time window: "7d", "30d", or "90d" (default: 30d)'),
+    days: z.number().int().min(1).max(90).optional().describe('Number of days to look back (default: 30, max: 90)'),
   },
-  async ({ period }) => {
+  async (input) => {
     try {
-      const trends = await getMemoryTrends(period)
-      if (trends.length === 0) {
-        return { content: [{ type: 'text', text: 'No trend data available.' }] }
-      }
-      const lines = trends.map(t => `  ${t.date}: ${t.count}`)
-      return {
-        content: [{ type: 'text', text: `Memory creation trends${period ? ` (${period})` : ''}:\n\n${lines.join('\n')}` }],
-      }
+      const days = Math.min(input.days ?? 30, 90)
+      const raw = await getMemoryTrends()
+      // getMemoryTrends returns TrendEntry[] (flat array of { date, count })
+      const allEntries: any[] = Array.isArray(raw) ? raw : (raw as any)?.daily_counts ?? []
+      const entries = allEntries.slice(-days)
+      const total = entries.reduce((s: number, e: any) => s + (e.count ?? 0), 0)
+      const thisWeek = entries.slice(-7).reduce((s: number, e: any) => s + (e.count ?? 0), 0)
+      const text = [
+        `## Memory Trends (last ${days} days)`,
+        `- Total: ${total} memories created`,
+        `- This week: ${thisWeek}`,
+        '',
+        '### Daily breakdown',
+        ...entries.slice(-7).map((e: any) => `- ${e.date}: ${e.count}`)
+      ].join('\n')
+      return { content: [{ type: 'text', text: text }] }
     } catch (err) {
       return {
         content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
