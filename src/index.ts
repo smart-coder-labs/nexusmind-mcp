@@ -2450,6 +2450,38 @@ server.tool(
   }
 )
 
+// get_session_stats
+server.tool(
+  'get_session_stats',
+  'Get session statistics: total sessions, total memories across all sessions, most active sessions.',
+  {},
+  async () => {
+    try {
+      const sessions = await listSessions({ limit: 100 })
+      const all = sessions ?? []
+      const totalMemories = all.reduce((sum: number, s: any) => sum + (s.memory_count ?? 0), 0)
+      const topSessions = [...all]
+        .sort((a: any, b: any) => (b.memory_count ?? 0) - (a.memory_count ?? 0))
+        .slice(0, 5)
+      const text = [
+        '## Session Stats',
+        `- Total sessions: ${all.length}`,
+        `- Total memories across sessions: ${totalMemories}`,
+        `- Avg memories per session: ${all.length ? Math.round(totalMemories / all.length) : 0}`,
+        '',
+        '## Most Active Sessions',
+        ...topSessions.map((s: any) => `- **${s.summary || s.name || 'Untitled'}**: ${s.memory_count ?? 0} memories`),
+      ].join('\n')
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
 // memory_health_check
 server.tool(
   'memory_health_check',
