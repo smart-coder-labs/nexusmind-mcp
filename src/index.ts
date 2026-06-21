@@ -3516,6 +3516,114 @@ server.tool(
   }
 )
 
+// ── Agent Sync ───────────────────────────────────────────────────────────────
+
+// sync_agent_context
+server.tool(
+  'sync_agent_context',
+  'Save the current agent session context to NexusMind as reusable memories. Use this at the end of a work session or when you\'ve made important discoveries that should persist.',
+  {
+    discoveries: z.array(z.object({
+      title: z.string().describe('Short title for this discovery/decision'),
+      content: z.string().describe('Full content of what was learned'),
+      tags: z.array(z.string()).optional().describe('Tags to categorize this memory'),
+    })).describe('List of discoveries, decisions, or insights to persist'),
+    session_summary: z.string().optional().describe('Optional high-level summary of the work session'),
+    project_context: z.string().optional().describe('Project name or context identifier'),
+  },
+  async (input) => {
+    const results: string[] = []
+
+    for (const discovery of input.discoveries) {
+      try {
+        const memory = await storeMemory({
+          content: discovery.content,
+          title: discovery.title,
+          tags: [...(discovery.tags ?? []), 'agent-sync'],
+          tool: 'agent-sync',
+          ...(input.project_context ? { project: input.project_context } : {}),
+        })
+        results.push(`✓ Saved: "${discovery.title}" (id: ${memory.id})`)
+      } catch (e: any) {
+        results.push(`✗ Failed: "${discovery.title}" — ${e.message}`)
+      }
+    }
+
+    if (input.session_summary) {
+      try {
+        const memory = await storeMemory({
+          content: input.session_summary,
+          title: `Session summary${input.project_context ? ` — ${input.project_context}` : ''}`,
+          tags: ['agent-sync', 'session-summary'],
+          tool: 'agent-sync',
+          ...(input.project_context ? { project: input.project_context } : {}),
+        })
+        results.push(`✓ Saved session summary (id: ${memory.id})`)
+      } catch (e: any) {
+        results.push(`✗ Failed to save session summary — ${e.message}`)
+      }
+    }
+
+    const saved = results.filter(r => r.startsWith('✓')).length
+    return {
+      content: [{
+        type: 'text',
+        text: [
+          `## Sync complete — ${saved}/${results.length} saved`,
+          '',
+          ...results,
+        ].join('\n'),
+      }],
+    }
+  }
+)
+
+// get_agent_context
+server.tool(
+  'get_agent_context',
+  'Get all the context an agent needs to start working: org stats, recent memories, and active conventions. Faster alternative to calling each tool separately.',
+  {},
+  async () => {
+    const [stats, conventions, recentMemories] = await Promise.all([
+      getStats().catch(() => null),
+      listConventions().catch(() => [] as Awaited<ReturnType<typeof listConventions>>),
+      listMemories({ limit: 5 }).catch(() => [] as Awaited<ReturnType<typeof listMemories>>),
+    ])
+
+    const sections: string[] = [
+      '## Org Stats',
+      stats
+        ? `- Total memories: ${stats.total_memories ?? 'N/A'}\n- Total users: ${stats.total_users ?? 'N/A'}\n- Total projects: ${stats.total_code_projects ?? 'N/A'}`
+        : 'Stats unavailable',
+      '',
+      '## Top Conventions (most important rules)',
+    ]
+
+    if (Array.isArray(conventions) && conventions.length > 0) {
+      for (const c of conventions.slice(0, 5)) {
+        sections.push(`### ${c.title ?? `Convention ${c.id}`}`)
+        sections.push(c.content ?? '')
+        sections.push('')
+      }
+    } else {
+      sections.push('No conventions found.')
+    }
+
+    sections.push('')
+    sections.push('## Recent Memories')
+
+    if (Array.isArray(recentMemories) && recentMemories.length > 0) {
+      for (const m of recentMemories.slice(0, 5)) {
+        sections.push(`- [${m.id?.slice(0, 8)}] ${(m.title ?? m.content)?.slice(0, 100)}`)
+      }
+    } else {
+      sections.push('No recent memories found.')
+    }
+
+    return { content: [{ type: 'text', text: sections.join('\n') }] }
+  }
+)
+
 // ── Start ────────────────────────────────────────────────────────────────────
 
 const transport = new StdioServerTransport()
