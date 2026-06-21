@@ -13,7 +13,7 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, listWebhooks, createWebhook, deleteWebhook, listOrgKeys, revokeApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, listWebhooks, createWebhook, deleteWebhook, listOrgKeys, revokeApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -70,6 +70,52 @@ server.tool(
       const label = title ? `"${title}"` : `id: ${res.id}`
       return {
         content: [{ type: 'text', text: `Memory stored (${label})` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// smart_store_memory
+server.tool(
+  'smart_store_memory',
+  'Store a memory with automatic type detection and tagging. Analyzes the content to suggest tags (bugfix, decision, feature, discovery, etc.) before storing.',
+  {
+    content:    z.string().describe('Full memory content to classify and store'),
+    project:    z.string().optional().describe('Project or repo name (e.g. "nexusmind", "payments-api")'),
+    session_id: z.string().optional().describe('Session ID to link this memory to a session'),
+    extra_tags: z.array(z.string()).optional().describe('Additional tags to include alongside auto-detected ones'),
+  },
+  async ({ content, project, session_id, extra_tags }) => {
+    try {
+      const lower = content.toLowerCase()
+      const autoTags: string[] = []
+
+      if (/fix(ed|ing)?|bug|error|crash|broken|resolv/i.test(lower)) autoTags.push('bugfix')
+      if (/decid(ed|ing)?|chose|option|alternative|tradeoff|because/i.test(lower)) autoTags.push('decision')
+      if (/add(ed|ing)?|implement(ed|ing)?|built|creat(ed|ing)?|new feature/i.test(lower)) autoTags.push('feature')
+      if (/found|discover(ed|y)?|learn(ed|ing)?|realized|turns out|gotcha|note:/i.test(lower)) autoTags.push('discovery')
+      if (/refactor(ed|ing)?|moved|reorganiz(ed|ing)?|renamed|extract(ed|ing)?/i.test(lower)) autoTags.push('refactor')
+      if (/test(ed|ing)?|spec|coverage|unit|integration/i.test(lower)) autoTags.push('testing')
+
+      const allTags = [...new Set([...autoTags, ...(extra_tags ?? [])])]
+
+      const result = await storeMemory({
+        content,
+        tags: allTags,
+        ...(project    ? { project }    : {}),
+        ...(session_id ? { session_id } : {}),
+      })
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Memory stored (id: ${result?.id})\nAuto-detected tags: [${autoTags.join(', ') || 'none'}]\nAll tags: [${allTags.join(', ')}]`,
+        }],
       }
     } catch (err) {
       return {
@@ -1129,6 +1175,51 @@ server.tool(
   }
 )
 
+// get_audit_summary
+server.tool(
+  'get_audit_summary',
+  'Get a summary of recent audit activity: most active users, most common actions, and daily breakdown.',
+  {
+    days: z.number().int().min(1).max(90).optional().describe('Number of days to look back (default: 7)'),
+  },
+  async ({ days }) => {
+    try {
+      const entries = await getAuditLog({ limit: 500 })
+      const cutoff = new Date(Date.now() - (days ?? 7) * 24 * 60 * 60 * 1000)
+      const recent = (entries ?? []).filter((e: any) => new Date(e.created_at) >= cutoff)
+
+      const byAction: Record<string, number> = {}
+      const byUser: Record<string, number> = {}
+      recent.forEach((e: any) => {
+        byAction[e.action] = (byAction[e.action] ?? 0) + 1
+        const u = e.user_email ?? e.user_id ?? 'system'
+        byUser[u] = (byUser[u] ?? 0) + 1
+      })
+
+      const topActions = Object.entries(byAction).sort((a, b) => b[1] - a[1]).slice(0, 5)
+      const topUsers   = Object.entries(byUser).sort((a, b) => b[1] - a[1]).slice(0, 5)
+
+      const text = [
+        `# Audit Summary (last ${days ?? 7} days)`,
+        `Total events: ${recent.length}`,
+        '',
+        '## Top Actions',
+        ...topActions.map(([action, count]) => `- ${action}: ${count}`),
+        '',
+        '## Most Active Users',
+        ...topUsers.map(([user, count]) => `- ${user}: ${count} actions`),
+      ].join('\n')
+
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
 // ── Projects ─────────────────────────────────────────────────────────────────
 
 // list_projects
@@ -1174,6 +1265,37 @@ server.tool(
       const project = await createProject({ name, description })
       return {
         content: [{ type: 'text', text: `Project created: "${project.name}" (id: ${project.id})` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// update_project
+server.tool(
+  'update_project',
+  'Update project settings: description, custom AI instructions, data retention policy, or archive status.',
+  {
+    id:                  z.string().describe('The project ID to update (returned by list_projects)'),
+    description:         z.string().optional().describe('New description for the project'),
+    custom_instructions: z.string().optional().describe('Custom AI instructions injected into agent context for this project'),
+    retention_days:      z.number().int().min(0).optional().describe('Number of days to retain memories for this project (0 = retain forever)'),
+    archived:            z.boolean().optional().describe('Set to true to archive the project, false to restore it'),
+  },
+  async ({ id, description, custom_instructions, retention_days, archived }) => {
+    try {
+      await updateProject(id, { description, custom_instructions, retention_days, archived })
+      const parts: string[] = [`Project ${id} updated.`]
+      if (description         !== undefined) parts.push(`description: ${description || '(cleared)'}`)
+      if (custom_instructions !== undefined) parts.push(`custom_instructions: ${custom_instructions ? '(set)' : '(cleared)'}`)
+      if (retention_days      !== undefined) parts.push(`retention_days: ${retention_days}`)
+      if (archived            !== undefined) parts.push(`archived: ${archived}`)
+      return {
+        content: [{ type: 'text', text: parts.join('\n') }],
       }
     } catch (err) {
       return {
@@ -2231,6 +2353,69 @@ server.tool(
   }
 )
 
+// bulk_archive_conventions
+server.tool(
+  'bulk_archive_conventions',
+  'Archive all conventions matching category and/or weight threshold. Useful for cleaning up outdated conventions.',
+  {
+    category:   z.string().optional().describe('Filter by category (e.g. "naming", "architecture"). Omit to match all categories.'),
+    max_weight: z.number().optional().describe('Archive conventions with weight less than or equal to this value. Omit to ignore weight when filtering.'),
+  },
+  async ({ category, max_weight }) => {
+    try {
+      const conventions = await listConventions(category, false)
+      const targets = conventions.filter(c => {
+        if (max_weight != null) {
+          const w = (c as any).weight ?? 0
+          if (w > max_weight) return false
+        }
+        return true
+      })
+      if (targets.length === 0) {
+        return { content: [{ type: 'text', text: 'No conventions matched the given filters. Nothing archived.' }] }
+      }
+      await Promise.all(targets.map(c => archiveConvention(c.id)))
+      const categoryNote = category ? ` in category "${category}"` : ''
+      const weightNote   = max_weight != null ? ` with weight ≤ ${max_weight}` : ''
+      return {
+        content: [{ type: 'text', text: `Archived ${targets.length} convention(s)${categoryNote}${weightNote}.` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// bulk_update_convention_weight
+server.tool(
+  'bulk_update_convention_weight',
+  'Set the weight for all conventions in a category. Use to boost or reduce an entire category\'s priority.',
+  {
+    category: z.string().describe('Category whose conventions will be updated (e.g. "naming", "architecture")'),
+    weight:   z.number().int().describe('New weight to assign to all conventions in the category'),
+  },
+  async ({ category, weight }) => {
+    try {
+      const conventions = await listConventions(category, false)
+      if (conventions.length === 0) {
+        return { content: [{ type: 'text', text: `No active conventions found for category "${category}".` }] }
+      }
+      await Promise.all(conventions.map(c => updateConvention(c.id, { weight })))
+      return {
+        content: [{ type: 'text', text: `Updated weight to ${weight} for ${conventions.length} convention(s) in category "${category}".` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
 // summarize_project
 server.tool(
   'summarize_project',
@@ -2416,6 +2601,138 @@ server.tool(
       return {
         content: [{ type: 'text', text: `Decision recorded: "${title}" (id: ${result?.id})` }],
       }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ── Sprint / Standup Tools ───────────────────────────────────────────────────
+
+server.tool(
+  'create_sprint_retrospective',
+  'Generate a sprint retrospective from recent memories grouped by type.',
+  {
+    sprint_name: z.string().optional().describe('Label for the sprint (e.g. "Sprint 42")'),
+    since:       z.string().optional().describe('ISO date string — start of the period (default: 14 days ago)'),
+    project:     z.string().optional().describe('Project to filter memories by'),
+  },
+  async (input) => {
+    try {
+      const memories = await searchMemories({ query: input.project ?? '', limit: 50 })
+      const since = input.since ? new Date(input.since) : new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
+      const recent = (memories ?? []).filter((m: any) => new Date(m.created_at) >= since)
+      const byType = {
+        shipped:     recent.filter((m: any) => m.tags?.some((t: string) => ['feature','shipped','done'].includes(t))),
+        decisions:   recent.filter((m: any) => m.tags?.some((t: string) => ['decision','adr'].includes(t))),
+        bugs:        recent.filter((m: any) => m.tags?.some((t: string) => ['bugfix','fix','bug'].includes(t))),
+        discoveries: recent.filter((m: any) => m.tags?.some((t: string) => ['discovery','learning'].includes(t))),
+      }
+      const sprintLabel = input.sprint_name ?? `Sprint ending ${new Date().toLocaleDateString()}`
+      const fmt = (arr: any[]) => arr.length ? arr.slice(0, 10).map((m: any) => `- ${m.content.slice(0, 120)}`).join('\n') : '- (none recorded)'
+      const text = [
+        `# Sprint Retrospective: ${sprintLabel}`,
+        `Period: ${since.toLocaleDateString()} → ${new Date().toLocaleDateString()}`,
+        `Memories analyzed: ${recent.length}`,
+        '',
+        '## ✅ Shipped',
+        fmt(byType.shipped),
+        '',
+        '## 🔧 Bugs',
+        fmt(byType.bugs),
+        '',
+        '## 🧭 Decisions',
+        fmt(byType.decisions),
+        '',
+        '## 💡 Discoveries',
+        fmt(byType.discoveries),
+        '',
+        '## Summary',
+        `Shipped:${byType.shipped.length} Bugs:${byType.bugs.length} Decisions:${byType.decisions.length} Learnings:${byType.discoveries.length}`,
+      ].join('\n')
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+server.tool(
+  'generate_daily_standup',
+  "Generate a daily standup from yesterday's memories.",
+  {
+    project: z.string().optional().describe('Project to filter memories by'),
+  },
+  async (input) => {
+    try {
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000)
+      const memories = await searchMemories({ query: input.project ?? '', limit: 20 })
+      const recent = (memories ?? []).filter((m: any) => new Date(m.created_at) >= yesterday)
+      const text = [
+        `# Daily Standup — ${new Date().toLocaleDateString()}`,
+        '',
+        '## Yesterday',
+        ...(recent.length ? recent.map((m: any) => `- ${m.content.slice(0, 100)}`) : ['- (none recorded)']),
+        '',
+        '## Today\n- [Plan next steps]',
+        '',
+        '## Blockers\n- [Note blockers]',
+      ].join('\n')
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// analyze_memory_gaps
+server.tool(
+  'analyze_memory_gaps',
+  'Find time gaps where no memories were stored. Helps identify periods of untracked work or team members not using NexusMind.',
+  {
+    days: z.number().int().min(1).max(365).optional().describe('Number of days to analyze (default: 30)'),
+  },
+  async (input) => {
+    try {
+      const trends = await getMemoryTrends()
+      const days = input.days ?? 30
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+      const recent = (trends ?? []).filter((t: any) => new Date(t.date) >= cutoff)
+
+      const gaps: string[] = []
+      let currentGap = 0
+      let maxGap = 0
+
+      for (const entry of recent) {
+        if (entry.count === 0) {
+          currentGap++
+          maxGap = Math.max(maxGap, currentGap)
+        } else {
+          if (currentGap >= 2) gaps.push(`${currentGap}-day gap ending ${entry.date}`)
+          currentGap = 0
+        }
+      }
+
+      const total = recent.reduce((s: number, t: any) => s + t.count, 0)
+      const activeDays = recent.filter((t: any) => t.count > 0).length
+      const avgPerActiveDay = activeDays ? (total / activeDays).toFixed(1) : '0'
+
+      const text = [
+        `# Memory Gap Analysis (last ${days} days)`,
+        '',
+        `## Summary`,
+        `- Total memories: ${total}`,
+        `- Active days: ${activeDays}/${recent.length}`,
+        `- Avg per active day: ${avgPerActiveDay}`,
+        `- Longest gap: ${maxGap} days`,
+        '',
+        gaps.length ? `## Notable Gaps\n${gaps.map(g => `- ${g}`).join('\n')}` : '## No significant gaps found ✅',
+      ].join('\n')
+
+      return { content: [{ type: 'text', text }] }
     } catch (err) {
       return {
         content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],

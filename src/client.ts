@@ -437,6 +437,7 @@ export interface UpdateConventionInput {
   title?: string
   category?: string
   content?: string
+  weight?: number
 }
 
 export function listConventions(category?: string, includeArchived?: boolean): Promise<Convention[]> {
@@ -519,6 +520,16 @@ export function listProjects(params: { include_archived?: boolean } = {}): Promi
 export function createProject(data: { name: string; description?: string }): Promise<Project> {
   return request<Project>('/v1/projects', {
     method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateProject(
+  id: string,
+  data: Partial<{ description: string; custom_instructions: string; retention_days: number; archived: boolean }>,
+): Promise<void> {
+  return request<void>(`/v1/admin/projects/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
     body: JSON.stringify(data),
   })
 }
