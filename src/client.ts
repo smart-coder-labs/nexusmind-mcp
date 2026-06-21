@@ -588,6 +588,17 @@ export function listRoles(): Promise<OrgRole[]> {
   return request<OrgRole[]>('/v1/roles')
 }
 
+export function assignUserRole(userId: string, role: string): Promise<void> {
+  return request<void>(`/v1/admin/users/${encodeURIComponent(userId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ role }),
+  })
+}
+
+export function getUsersByRole(role: string): Promise<OrgUser[]> {
+  return request<OrgUser[]>(`/v1/admin/users?role=${encodeURIComponent(role)}`)
+}
+
 // ── Webhooks ──────────────────────────────────────────────────────────────────
 
 export interface Webhook {

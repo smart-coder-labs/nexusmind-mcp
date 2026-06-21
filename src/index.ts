@@ -13,7 +13,7 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, listWebhooks, createWebhook, deleteWebhook, listOrgKeys, revokeApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, listOrgKeys, revokeApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -143,6 +143,60 @@ server.tool(
       const text = memories.length === 0
         ? `No memories found for query: "${query}"`
         : `Found ${memories.length} result(s) for "${query}":\n\n${formatList(memories)}`
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// search_memories_advanced
+server.tool(
+  'search_memories_advanced',
+  'Advanced memory search with date range, tag matching mode (any/all), project filter, and pinned filter. More powerful than search_memory.',
+  {
+    query:            z.string().optional().describe('Search query (e.g. "authentication", "database pool")'),
+    tags:             z.array(z.string()).optional().describe('Filter by tags'),
+    tag_mode:         z.enum(['any', 'all']).optional().describe('Tag matching mode — "any" (default) or "all" (all tags must be present)'),
+    project:          z.string().optional().describe('Filter by project name'),
+    since:            z.string().optional().describe('ISO date — only memories created on or after this date (e.g. "2025-01-01")'),
+    until:            z.string().optional().describe('ISO date — only memories created on or before this date (e.g. "2025-12-31")'),
+    pinned:           z.boolean().optional().describe('When true, return only pinned memories'),
+    limit:            z.number().int().min(1).max(100).optional().describe('Max results to return (default: 20)'),
+    include_archived: z.boolean().optional().describe('When true, include archived memories in results (default: false)'),
+  },
+  async (input) => {
+    try {
+      const results = await searchMemories({
+        query: input.query ?? '',
+        limit: input.limit ?? 20,
+        pinned: input.pinned,
+        archived: input.include_archived,
+      })
+
+      let filtered = results ?? []
+
+      // Date filter
+      if (input.since) filtered = filtered.filter((m: any) => m.created_at >= input.since!)
+      if (input.until) filtered = filtered.filter((m: any) => m.created_at <= input.until! + 'T23:59:59')
+
+      // Project filter
+      if (input.project) filtered = filtered.filter((m: any) => m.project === input.project)
+
+      // Tag mode 'all' — ALL specified tags must be present
+      if (input.tags?.length && input.tag_mode === 'all') {
+        filtered = filtered.filter((m: any) =>
+          input.tags!.every(t => m.tags?.includes(t))
+        )
+      }
+
+      const text = filtered.map((m: any) =>
+        `[${m.id}] ${m.content.slice(0, 150)}… (tags: ${m.tags?.join(', ') || 'none'}, created: ${m.created_at?.slice(0, 10)})`
+      ).join('\n') || 'No memories found'
+
       return { content: [{ type: 'text', text }] }
     } catch (err) {
       return {
@@ -2733,6 +2787,60 @@ server.tool(
       ].join('\n')
 
       return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// assign_user_role
+server.tool(
+  'assign_user_role',
+  "Change a user's role (e.g., 'admin', 'member', 'viewer'). Use list_users to find user IDs.",
+  {
+    user_id: z.string().describe('The user ID to update (returned by list_users)'),
+    role:    z.string().describe("The role to assign (e.g. 'admin', 'member', 'viewer')"),
+  },
+  async ({ user_id, role }) => {
+    try {
+      await assignUserRole(user_id, role)
+      return {
+        content: [{ type: 'text', text: `User ${user_id} role updated to "${role}".` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// get_users_by_role
+server.tool(
+  'get_users_by_role',
+  'List all users with a specific role.',
+  {
+    role: z.string().describe("The role to filter by (e.g. 'admin', 'member', 'viewer')"),
+  },
+  async ({ role }) => {
+    try {
+      const users = await getUsersByRole(role)
+      if (users.length === 0) {
+        return { content: [{ type: 'text', text: `No users found with role "${role}".` }] }
+      }
+      const lines = users.map((u, i) => {
+        const name   = u.name  ? ` — ${u.name}`  : ''
+        const email  = u.email ? ` <${u.email}>` : ''
+        const status = u.status ? ` [${u.status}]` : ''
+        return `[${i + 1}] ${u.id}${name}${email}${status}`
+      })
+      return {
+        content: [{ type: 'text', text: `${users.length} user(s) with role "${role}":\n\n${lines.join('\n')}` }],
+      }
     } catch (err) {
       return {
         content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
