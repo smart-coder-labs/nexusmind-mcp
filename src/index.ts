@@ -13,7 +13,7 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -2421,10 +2421,35 @@ server.tool(
 // quick_health_check
 server.tool(
   'quick_health_check',
-  'Fast memory health summary: total count, estimated duplicates, stale memories (>30 days old), and untagged memories. Faster than memory_health_check.',
+  'Fast memory health summary: total count, duplicates, stale memories (>30 days old), and untagged memories. Uses the backend health endpoint for authoritative counts; falls back to client-side computation if unavailable.',
   {},
   async () => {
     try {
+      // Try backend endpoint first (returns real counts from DB)
+      let health: any = null
+      try {
+        health = await getMemoryHealth()
+      } catch (_) {
+        health = null
+      }
+
+      if (health && health.total_memories !== undefined) {
+        // Use authoritative backend data
+        const text = [
+          '## Memory Health (authoritative)',
+          `- Total memories: ${health.total_memories}`,
+          `- Duplicates: ${health.duplicate_count}`,
+          `- Stale (>30d): ${health.stale_count}`,
+          `- Untagged: ${health.untagged_count}`,
+          '',
+          health.duplicate_count > 0 ? '⚠️ Run `find_duplicate_memories` for details.' : '✅ No duplicates.',
+          health.stale_count > 10 ? '⚠️ Many stale memories — consider archiving.' : '✅ Memory freshness good.',
+          health.untagged_count > 10 ? '⚠️ Many untagged — use `search_and_tag` to categorize.' : '✅ Tagging coverage good.',
+        ].join('\n')
+        return { content: [{ type: 'text', text }] }
+      }
+
+      // Fall back to client-side computation
       const memories = await searchMemories({ query: '', limit: 500 })
       const all = memories ?? []
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)

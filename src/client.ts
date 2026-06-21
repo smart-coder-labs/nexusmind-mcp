@@ -917,6 +917,20 @@ export function pinConvention(id: string): Promise<Convention> {
   })
 }
 
+// ── Memory Health ─────────────────────────────────────────────────────────────
+
+export interface MemoryHealth {
+  total_memories: number
+  duplicate_count: number
+  stale_count: number
+  untagged_count: number
+  [key: string]: unknown
+}
+
+export function getMemoryHealth(): Promise<MemoryHealth> {
+  return request<MemoryHealth>('/v1/admin/memories/health')
+}
+
 // ── Export Memories ───────────────────────────────────────────────────────────
 
 export interface ExportMemoriesInput {
