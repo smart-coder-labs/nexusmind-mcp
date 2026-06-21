@@ -387,6 +387,13 @@ export function deleteCollection(id: string): Promise<void> {
   return request<void>(`/v1/admin/collections/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+export function updateCollection(id: string, data: { name?: string; description?: string }): Promise<CollectionItem> {
+  return request<CollectionItem>(`/v1/admin/collections/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
 // ── Admin Keys (Agents) ───────────────────────────────────────────────────────
 
 export interface OrgKey {
@@ -559,6 +566,13 @@ export function createPolicy(data: { name: string; description?: string; rules?:
 
 export function deletePolicy(id: string): Promise<void> {
   return request<void>(`/v1/policies/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function updatePolicy(id: string, data: { name?: string; description?: string; rules?: unknown }): Promise<Policy> {
+  return request<Policy>(`/v1/policies/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
 }
 
 // ── Projects ──────────────────────────────────────────────────────────────────

@@ -13,7 +13,7 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listPolicies, createPolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -3459,6 +3459,31 @@ server.tool(
   }
 )
 
+// update_policy
+server.tool(
+  'update_policy',
+  'Update an existing access policy: change its name, description, or rules.',
+  {
+    id:          z.string().describe('ID of the policy to update (returned by list_policies)'),
+    name:        z.string().optional().describe('New name for the policy'),
+    description: z.string().optional().describe('New description for the policy'),
+    rules:       z.record(z.unknown()).optional().describe('New policy rules as a JSON object'),
+  },
+  async ({ id, name, description, rules }) => {
+    try {
+      const policy = await updatePolicy(id, { name, description, rules })
+      return {
+        content: [{ type: 'text', text: `Policy updated: "${policy.name ?? name ?? id}" (id: ${policy.id})` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
 // ── Collections (create / delete) ─────────────────────────────────────────────
 
 // create_collection
@@ -3474,6 +3499,30 @@ server.tool(
       const collection = await createCollection({ name, description })
       return {
         content: [{ type: 'text', text: `Collection created: "${collection.name}" (id: ${collection.id})` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// update_collection
+server.tool(
+  'update_collection',
+  'Update a collection name or description. Use list_collections to find collection IDs.',
+  {
+    id:          z.string().describe('ID of the collection to update (returned by list_collections)'),
+    name:        z.string().optional().describe('New name for the collection'),
+    description: z.string().optional().describe('New description for the collection'),
+  },
+  async ({ id, name, description }) => {
+    try {
+      const collection = await updateCollection(id, { name, description })
+      return {
+        content: [{ type: 'text', text: `Collection updated: "${collection.name}" (id: ${collection.id})` }],
       }
     } catch (err) {
       return {
