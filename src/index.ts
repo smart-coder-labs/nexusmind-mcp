@@ -13,7 +13,7 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listPolicies, createPolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, assignUserRole, getUsersByRole, listWebhooks, createWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -3281,6 +3281,149 @@ server.tool(
 
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ── Policies ─────────────────────────────────────────────────────────────────
+
+// list_policies
+server.tool(
+  'list_policies',
+  'List all access policies in the organization. Policies define what actions are allowed or denied on resources.',
+  {},
+  async () => {
+    try {
+      const policies = await listPolicies()
+      if (policies.length === 0) {
+        return { content: [{ type: 'text', text: 'No policies found.' }] }
+      }
+      const lines = policies.map((p, i) => {
+        const name = p.name ? ` — ${p.name}` : ''
+        const desc = p.description ? `\n    ${p.description}` : ''
+        return `[${i + 1}] id: ${p.id}${name}${desc}`
+      })
+      return {
+        content: [{ type: 'text', text: `${policies.length} policy(ies):\n\n${lines.join('\n\n')}` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// create_policy
+server.tool(
+  'create_policy',
+  'Create a new access policy. Policies control what actions are allowed or denied on resources in the organization.',
+  {
+    name:        z.string().describe('Name for the policy (e.g. "Read-only memory access")'),
+    description: z.string().optional().describe('Description of what this policy allows or denies'),
+    rules:       z.record(z.unknown()).optional().describe('Policy rules as a JSON object (structure depends on backend policy engine)'),
+  },
+  async ({ name, description, rules }) => {
+    try {
+      const policy = await createPolicy({ name, description, rules })
+      return {
+        content: [{ type: 'text', text: `Policy created: "${policy.name ?? name}" (id: ${policy.id})` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// delete_policy
+server.tool(
+  'delete_policy',
+  'Delete a policy permanently. Requires confirm: true. There is no undo.',
+  {
+    id:      z.string().describe('ID of the policy to delete (returned by list_policies)'),
+    confirm: z.boolean().describe('Must be true to perform the deletion. Without this, the tool refuses.'),
+  },
+  async ({ id, confirm }) => {
+    if (confirm !== true) {
+      return {
+        content: [{
+          type: 'text',
+          text: 'Refused: delete_policy requires confirm: true. No HTTP request was made.',
+        }],
+        isError: true,
+      }
+    }
+    try {
+      await deletePolicy(id)
+      return {
+        content: [{ type: 'text', text: `Policy deleted (id: ${id})` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ── Collections (create / delete) ─────────────────────────────────────────────
+
+// create_collection
+server.tool(
+  'create_collection',
+  'Create a new memory collection. Collections group related memories together for filtered search and context retrieval.',
+  {
+    name:        z.string().describe('Name for the collection (e.g. "Architecture decisions", "Onboarding materials")'),
+    description: z.string().optional().describe('Optional description of what this collection contains'),
+  },
+  async ({ name, description }) => {
+    try {
+      const collection = await createCollection({ name, description })
+      return {
+        content: [{ type: 'text', text: `Collection created: "${collection.name}" (id: ${collection.id})` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// delete_collection
+server.tool(
+  'delete_collection',
+  'Delete a collection permanently. Requires confirm: true. Memories in the collection are NOT deleted — they are unlinked from the collection. There is no undo.',
+  {
+    id:      z.string().describe('ID of the collection to delete (returned by list_collections)'),
+    confirm: z.boolean().describe('Must be true to perform the deletion. Without this, the tool refuses.'),
+  },
+  async ({ id, confirm }) => {
+    if (confirm !== true) {
+      return {
+        content: [{
+          type: 'text',
+          text: 'Refused: delete_collection requires confirm: true. No HTTP request was made.',
+        }],
+        isError: true,
+      }
+    }
+    try {
+      await deleteCollection(id)
+      return {
+        content: [{ type: 'text', text: `Collection deleted (id: ${id})` }],
       }
     } catch (err) {
       return {

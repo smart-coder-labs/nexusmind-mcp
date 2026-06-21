@@ -376,6 +376,17 @@ export function assignMemoryToCollection(memoryId: string, collectionId: string 
   })
 }
 
+export function createCollection(data: { name: string; description?: string }): Promise<CollectionItem> {
+  return request<CollectionItem>('/v1/admin/collections', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteCollection(id: string): Promise<void> {
+  return request<void>(`/v1/admin/collections/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
 // ── Admin Keys (Agents) ───────────────────────────────────────────────────────
 
 export interface OrgKey {
@@ -521,6 +532,33 @@ export function checkPolicy(action: string, resource: string, context?: Record<s
     method: 'POST',
     body: JSON.stringify({ action, resource, context }),
   })
+}
+
+// ── Policies ──────────────────────────────────────────────────────────────────
+
+export interface Policy {
+  id: string
+  name?: string
+  description?: string
+  rules?: unknown
+  created_at?: string
+  updated_at?: string
+  [key: string]: unknown
+}
+
+export function listPolicies(): Promise<Policy[]> {
+  return request<Policy[]>('/v1/policies')
+}
+
+export function createPolicy(data: { name: string; description?: string; rules?: unknown }): Promise<Policy> {
+  return request<Policy>('/v1/policies', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function deletePolicy(id: string): Promise<void> {
+  return request<void>(`/v1/policies/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 // ── Projects ──────────────────────────────────────────────────────────────────
