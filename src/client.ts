@@ -439,6 +439,7 @@ export interface StoreConventionInput {
   title?: string
   category?: string
   content: string
+  weight?: number
 }
 
 export interface UpdateConventionInput {

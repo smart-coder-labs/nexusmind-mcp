@@ -1137,6 +1137,43 @@ server.tool(
   }
 )
 
+// import_conventions_from_text
+server.tool(
+  'import_conventions_from_text',
+  'Bulk import multiple conventions at once. Each item needs a title and content. Use this to import team conventions in batch.',
+  {
+    conventions: z.array(z.object({
+      title:    z.string().describe('Convention title'),
+      content:  z.string().describe('Convention content'),
+      category: z.string().optional().describe('Category (e.g. "architecture", "testing")'),
+      weight:   z.number().optional().describe('Priority weight (default: 100)'),
+    })).min(1).describe('Array of conventions to import'),
+  },
+  async ({ conventions }) => {
+    const results: string[] = []
+    for (const conv of conventions) {
+      try {
+        await storeConvention({
+          title:    conv.title,
+          content:  conv.content,
+          category: conv.category ?? 'general',
+          weight:   conv.weight ?? 100,
+        })
+        results.push(`✅ ${conv.title}`)
+      } catch (e: any) {
+        results.push(`❌ ${conv.title}: ${e.message}`)
+      }
+    }
+    const successCount = results.filter(r => r.startsWith('✅')).length
+    return {
+      content: [{
+        type: 'text',
+        text: `Imported ${successCount}/${conventions.length} conventions:\n${results.join('\n')}`,
+      }],
+    }
+  }
+)
+
 // get_project_context
 server.tool(
   'get_project_context',
