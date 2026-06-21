@@ -1645,6 +1645,32 @@ server.tool(
   }
 )
 
+// get_announcement
+server.tool(
+  'get_announcement',
+  "Get the current org announcement. Returns the announcement text, or 'No active announcement' if none is set.",
+  {},
+  async () => {
+    try {
+      const org = await getOrgSettings()
+      const announcement = org?.announcement ?? ''
+      return {
+        content: [{
+          type: 'text',
+          text: announcement.trim()
+            ? `Current announcement: ${announcement}`
+            : 'No active announcement.',
+        }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
 // update_org_settings
 server.tool(
   'update_org_settings',
