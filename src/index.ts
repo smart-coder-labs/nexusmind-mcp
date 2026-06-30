@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 if (process.argv[2] === 'setup') {
-  await import('./setup.js')
+  const { main } = await import('./setup.js')
+  await main()
   process.exit(0)
 }
 
@@ -556,10 +557,10 @@ server.tool(
 // global_search
 server.tool(
   'global_search',
-  'Search across memories, code, and users simultaneously. Returns grouped results by type. Use when you need a broad cross-resource search rather than targeted memory or code lookup.',
+  'Search across memories, policies, conventions, and users simultaneously. Returns grouped results by type. Use when you need a broad cross-resource search rather than targeted memory or code lookup.',
   {
     query: z.string().describe('Search query (e.g. "authentication", "user onboarding")'),
-    types: z.array(z.enum(['memories', 'code', 'users'])).optional()
+    types: z.array(z.enum(['memories', 'code', 'users', 'policies', 'conventions'])).optional()
       .describe('Resource types to search. Omit to search all types.'),
   },
   async ({ query, types }) => {
