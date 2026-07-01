@@ -124,7 +124,8 @@ export function searchMemories(queryOrInput: string | SearchMemoriesInput, limit
           ...(queryOrInput.pinned        !== undefined && { pinned:        queryOrInput.pinned }),
           ...(queryOrInput.archived      !== undefined && { archived:      queryOrInput.archived }),
         }
-  return request('/v1/memory/search', { method: 'POST', body: JSON.stringify(body) })
+  return request<Memory[] | { memories?: Memory[] }>('/v1/memory/search', { method: 'POST', body: JSON.stringify(body) })
+    .then(res => Array.isArray(res) ? res : (res?.memories ?? []))
 }
 
 export function listMemories(params: {
@@ -140,7 +141,8 @@ export function listMemories(params: {
   if (params.type)    qs.set('type',    params.type)
   if (params.scope)   qs.set('scope',   params.scope)
   if (params.limit)   qs.set('limit',   String(params.limit))
-  return request(`/v1/memory?${qs}`)
+  return request<Memory[] | { memories?: Memory[] }>(`/v1/memory?${qs}`)
+    .then(res => Array.isArray(res) ? res : (res?.memories ?? []))
 }
 
 export function getMemoryById(id: string): Promise<Memory> {
