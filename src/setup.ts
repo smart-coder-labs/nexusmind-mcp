@@ -6,7 +6,7 @@
  * Usage:
  *   npx @smart-coder-labs/nexusmind-mcp setup
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -256,7 +256,22 @@ export async function main() {
   }
 }
 
-// Run directly when invoked as a script (not when imported as a module)
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await main()
+// Run when invoked as a script — including via the npm bin symlink, where
+// process.argv[1] points at .bin/nexusmind-setup rather than dist/setup.js.
+// Resolve both through realpath so the symlink matches the real module path.
+// (Skip when imported as a module.)
+{
+  const invoked = process.argv[1]
+  const modulePath = fileURLToPath(import.meta.url)
+  let isDirectRun = invoked === modulePath
+  if (!isDirectRun && invoked) {
+    try {
+      isDirectRun = realpathSync(invoked) === realpathSync(modulePath)
+    } catch {
+      isDirectRun = false
+    }
+  }
+  if (isDirectRun) {
+    await main()
+  }
 }
