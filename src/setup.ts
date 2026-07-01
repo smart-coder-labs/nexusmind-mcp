@@ -9,6 +9,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import * as readline from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
 
@@ -159,96 +160,103 @@ async function choose(rl: readline.Interface, prompt: string, options: string[])
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-log(`\n${c.bold}${c.cyan}NexusMind — Setup${c.reset}`)
-log(`${c.dim}──────────────────────────────────${c.reset}\n`)
+export async function main() {
+  log(`\n${c.bold}${c.cyan}NexusMind — Setup${c.reset}`)
+  log(`${c.dim}──────────────────────────────────${c.reset}\n`)
 
-const rl = readline.createInterface({ input, output })
+  const rl = readline.createInterface({ input, output })
 
-// API key + URL
-const envKey = process.env.NEXUSMIND_API_KEY  ?? ''
-const envUrl = process.env.NEXUSMIND_BASE_URL ?? ''
+  // API key + URL
+  const envKey = process.env.NEXUSMIND_API_KEY  ?? ''
+  const envUrl = process.env.NEXUSMIND_BASE_URL ?? ''
 
-let apiKey: string
-let baseUrl: string
+  let apiKey: string
+  let baseUrl: string
 
-if (envKey) {
-  const masked = envKey.length > 8 ? envKey.slice(0, 6) + '…' + envKey.slice(-4) : '***'
-  const answer = (await rl.question(`NexusMind API key [${masked}]: `)).trim()
-  apiKey = answer || envKey
-} else {
-  apiKey = (await rl.question('NexusMind API key (nm_…): ')).trim()
-}
-
-if (envUrl) {
-  const answer = (await rl.question(`Backend URL [${envUrl}]: `)).trim()
-  baseUrl = answer || envUrl
-} else {
-  baseUrl = (await rl.question('Backend URL [http://localhost:8080]: ')).trim() || 'http://localhost:8080'
-}
-
-if (!apiKey) {
-  warn('No API key provided — you can set NEXUSMIND_API_KEY and re-run setup.')
-}
-
-// Tool selection
-log('')
-log(`${c.bold}Configure for:${c.reset}`)
-log('  1) Claude Code')
-log('  2) Cursor')
-log('  3) Both (recommended)')
-
-const toolChoice = await choose(rl, '\nChoice [1-3]: ', ['1', '2', '3'])
-
-let doClaude = toolChoice === 1 || toolChoice === 3
-let doCursor = toolChoice === 2 || toolChoice === 3
-
-// Cursor scope (only if Cursor selected)
-let cursorScope: 'global' | 'project' = 'global'
-if (doCursor) {
-  log('')
-  log(`${c.bold}Cursor — where to write the config?${c.reset}`)
-  log('  1) Global (all projects)  →  ~/.cursor/mcp.json')
-  log(`  2) This project only      →  ${resolve(process.cwd())}/.cursor/mcp.json`)
-
-  const scopeChoice = await choose(rl, '\nChoice [1-2]: ', ['1', '2'])
-  cursorScope = scopeChoice === 1 ? 'global' : 'project'
-}
-
-rl.close()
-
-// Execute
-log('')
-if (doClaude) {
-  log(`${c.bold}Setting up Claude Code…${c.reset}`)
-  installClaudeCode(apiKey, baseUrl)
-  log('')
-}
-
-if (doCursor) {
-  log(`${c.bold}Setting up Cursor (${cursorScope})…${c.reset}`)
-  installCursor(apiKey, baseUrl, cursorScope)
-  log('')
-}
-
-// Done
-log(`${c.bold}${c.green}All done!${c.reset}\n`)
-
-if (doClaude) {
-  log(`${c.bold}Claude Code${c.reset}`)
-  log('  • Run: source ~/.zshrc  (or open a new terminal)')
-  log('  • Then restart Claude Code')
-  log('  • Tools available: store_memory, search_memory, list_memories, get_context')
-  log('')
-}
-if (doCursor) {
-  log(`${c.bold}Cursor${c.reset}`)
-  log('  • Run: source ~/.zshrc  (or open a new terminal)')
-  log('  • Then restart Cursor')
-  log('  • Tools available: store_memory, search_memory, list_memories, get_context')
-  if (cursorScope === 'global') {
-    log('  • Active for all projects globally')
+  if (envKey) {
+    const masked = envKey.length > 8 ? envKey.slice(0, 6) + '…' + envKey.slice(-4) : '***'
+    const answer = (await rl.question(`NexusMind API key [${masked}]: `)).trim()
+    apiKey = answer || envKey
   } else {
-    log('  • Active only in this project — open the folder in Cursor')
+    apiKey = (await rl.question('NexusMind API key (nm_…): ')).trim()
   }
+
+  if (envUrl) {
+    const answer = (await rl.question(`Backend URL [${envUrl}]: `)).trim()
+    baseUrl = answer || envUrl
+  } else {
+    baseUrl = (await rl.question('Backend URL [http://localhost:8080]: ')).trim() || 'http://localhost:8080'
+  }
+
+  if (!apiKey) {
+    warn('No API key provided — you can set NEXUSMIND_API_KEY and re-run setup.')
+  }
+
+  // Tool selection
   log('')
+  log(`${c.bold}Configure for:${c.reset}`)
+  log('  1) Claude Code')
+  log('  2) Cursor')
+  log('  3) Both (recommended)')
+
+  const toolChoice = await choose(rl, '\nChoice [1-3]: ', ['1', '2', '3'])
+
+  const doClaude = toolChoice === 1 || toolChoice === 3
+  const doCursor = toolChoice === 2 || toolChoice === 3
+
+  // Cursor scope (only if Cursor selected)
+  let cursorScope: 'global' | 'project' = 'global'
+  if (doCursor) {
+    log('')
+    log(`${c.bold}Cursor — where to write the config?${c.reset}`)
+    log('  1) Global (all projects)  →  ~/.cursor/mcp.json')
+    log(`  2) This project only      →  ${resolve(process.cwd())}/.cursor/mcp.json`)
+
+    const scopeChoice = await choose(rl, '\nChoice [1-2]: ', ['1', '2'])
+    cursorScope = scopeChoice === 1 ? 'global' : 'project'
+  }
+
+  rl.close()
+
+  // Execute
+  log('')
+  if (doClaude) {
+    log(`${c.bold}Setting up Claude Code…${c.reset}`)
+    installClaudeCode(apiKey, baseUrl)
+    log('')
+  }
+
+  if (doCursor) {
+    log(`${c.bold}Setting up Cursor (${cursorScope})…${c.reset}`)
+    installCursor(apiKey, baseUrl, cursorScope)
+    log('')
+  }
+
+  // Done
+  log(`${c.bold}${c.green}All done!${c.reset}\n`)
+
+  if (doClaude) {
+    log(`${c.bold}Claude Code${c.reset}`)
+    log('  • Run: source ~/.zshrc  (or open a new terminal)')
+    log('  • Then restart Claude Code')
+    log('  • Tools available: store_memory, search_memory, list_memories, get_context')
+    log('')
+  }
+  if (doCursor) {
+    log(`${c.bold}Cursor${c.reset}`)
+    log('  • Run: source ~/.zshrc  (or open a new terminal)')
+    log('  • Then restart Cursor')
+    log('  • Tools available: store_memory, search_memory, list_memories, get_context')
+    if (cursorScope === 'global') {
+      log('  • Active for all projects globally')
+    } else {
+      log('  • Active only in this project — open the folder in Cursor')
+    }
+    log('')
+  }
+}
+
+// Run directly when invoked as a script (not when imported as a module)
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  await main()
 }
