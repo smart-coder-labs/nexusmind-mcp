@@ -266,12 +266,14 @@ export function getSymbolContext(input: GetSymbolContextInput): Promise<CodeChun
 
 // ── Global Search ────────────────────────────────────────────────────────────
 
-export type GlobalSearchType = 'memories' | 'code' | 'users'
+export type GlobalSearchType = 'memories' | 'code' | 'users' | 'policies' | 'conventions'
 
 export interface GlobalSearchResult {
   memories?: unknown[]
   code?: unknown[]
   users?: unknown[]
+  policies?: unknown[]
+  conventions?: unknown[]
   [key: string]: unknown[] | undefined
 }
 

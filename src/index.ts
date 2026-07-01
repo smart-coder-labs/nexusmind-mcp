@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 if (process.argv[2] === 'setup') {
-  await import('./setup.js')
+  const { main } = await import('./setup.js')
+  await main()
   process.exit(0)
 }
 
@@ -129,9 +130,9 @@ server.tool(
 // search_memory
 server.tool(
   'search_memory',
-  "Call BEFORE starting any work that might have been done before. This is your FIRST action when a user's message references a project, feature, bug, or module you don't already have context on. If unsure whether to search — search. Pass keywords from the user's message as query.",
+  "Semantic search over team memories. Pass a query that describes the SPECIFIC information you need — e.g. \"how auth tokens are validated\", \"why we chose Postgres\", \"deploy pipeline config\". Do NOT pass a bare project/repo name: this is a semantic search, so a project name returns noise, not that project's context. To load a whole project's context, use get_context(project) or list_memories(project) instead. Use search_memory when you're looking for a particular past decision, fix, convention, or discovery.",
   {
-    query:         z.string().describe('What to search for (e.g. "authentication", "database connection pool")'),
+    query:         z.string().describe('A semantic description of what you need (e.g. "authentication flow", "database connection pool", "rate limit config"). NOT a project or repo name — use get_context/list_memories for whole-project context.'),
     limit:         z.number().int().min(1).max(50).optional().describe('Max results to return (default: 10)'),
     collection_id: z.string().optional().describe('Filter results to a specific collection ID'),
     pinned:        z.boolean().optional().describe('When true, return only pinned memories'),
@@ -556,10 +557,10 @@ server.tool(
 // global_search
 server.tool(
   'global_search',
-  'Search across memories, code, and users simultaneously. Returns grouped results by type. Use when you need a broad cross-resource search rather than targeted memory or code lookup.',
+  'Search across memories, policies, conventions, and users simultaneously. Returns grouped results by type. Use when you need a broad cross-resource search rather than targeted memory or code lookup.',
   {
     query: z.string().describe('Search query (e.g. "authentication", "user onboarding")'),
-    types: z.array(z.enum(['memories', 'code', 'users'])).optional()
+    types: z.array(z.enum(['memories', 'code', 'users', 'policies', 'conventions'])).optional()
       .describe('Resource types to search. Omit to search all types.'),
   },
   async ({ query, types }) => {
@@ -3186,7 +3187,7 @@ server.tool(
   },
   async (input) => {
     try {
-      const memories = await searchMemories({ query: input.project ?? '', limit: 50 })
+      const memories = await listMemories({ project: input.project, limit: 50 })
       const since = input.since ? new Date(input.since) : new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
       const recent = (memories ?? []).filter((m: any) => new Date(m.created_at) >= since)
       const byType = {
@@ -3233,7 +3234,7 @@ server.tool(
   async (input) => {
     try {
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000)
-      const memories = await searchMemories({ query: input.project ?? '', limit: 20 })
+      const memories = await listMemories({ project: input.project, limit: 20 })
       const recent = (memories ?? []).filter((m: any) => new Date(m.created_at) >= yesterday)
       const text = [
         `# Daily Standup — ${new Date().toLocaleDateString()}`,
