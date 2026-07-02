@@ -195,9 +195,18 @@ server.tool(
   },
   async (input) => {
     try {
+      const requestedLimit = input.limit ?? 20
+      // Client-side filters (date/project/tag_mode) run AFTER the backend result set — if we
+      // ask the backend for only `requestedLimit` results, filtering can silently under-return
+      // even when more matches exist. Fetch the backend max instead whenever a client-side
+      // filter is present, then slice to the requested limit ourselves.
+      const hasClientSideFilter = Boolean(
+        input.since || input.until || input.project || (input.tags?.length && input.tag_mode === 'all')
+      )
+      const BACKEND_MAX_LIMIT = 100
       const results = await searchMemories({
         query: input.query ?? '',
-        limit: input.limit ?? 20,
+        limit: hasClientSideFilter ? BACKEND_MAX_LIMIT : requestedLimit,
         pinned: input.pinned,
         archived: input.include_archived,
       })
@@ -217,6 +226,8 @@ server.tool(
           input.tags!.every(t => m.tags?.includes(t))
         )
       }
+
+      if (hasClientSideFilter) filtered = filtered.slice(0, requestedLimit)
 
       const text = filtered.map((m: any) =>
         `[${m.id}] ${m.content.slice(0, 150)}… (tags: ${m.tags?.join(', ') || 'none'}, created: ${m.created_at?.slice(0, 10)})`
