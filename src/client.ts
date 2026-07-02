@@ -492,10 +492,11 @@ export interface UpdateConventionInput {
   weight?: number
 }
 
-export function listConventions(category?: string, includeArchived?: boolean): Promise<Convention[]> {
+export function listConventions(category?: string, includeArchived?: boolean, project?: string): Promise<Convention[]> {
   const qs = new URLSearchParams()
   if (category) qs.set('category', encodeURIComponent(category))
   if (includeArchived) qs.set('include_archived', 'true')
+  if (project) qs.set('project', project)
   const query = qs.toString()
   return request<Convention[]>(query ? `/v1/conventions?${query}` : '/v1/conventions')
 }
@@ -557,8 +558,11 @@ export interface Policy {
   [key: string]: unknown
 }
 
-export function listPolicies(): Promise<Policy[]> {
-  return request<Policy[]>('/v1/policies')
+export function listPolicies(project?: string): Promise<Policy[]> {
+  const qs = new URLSearchParams()
+  if (project) qs.set('project', project)
+  const query = qs.toString()
+  return request<Policy[]>(query ? `/v1/policies?${query}` : '/v1/policies')
 }
 
 export function createPolicy(data: { name: string; description?: string; rules?: unknown }): Promise<Policy> {
