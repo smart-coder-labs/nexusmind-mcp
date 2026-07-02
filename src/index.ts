@@ -1254,8 +1254,12 @@ server.tool(
       const reason: string = result.reason ?? result.message ?? ''
       const status = allowed ? 'ALLOWED' : 'DENIED'
       const reasonLine = reason ? `\nReason: ${reason}` : ''
+      const violations: any[] = Array.isArray(result.violations) ? result.violations : []
+      const violationsLines = violations.length > 0
+        ? `\n\nViolations:\n${violations.map((v, i) => `${i + 1}. ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')}`
+        : ''
       return {
-        content: [{ type: 'text', text: `Policy check: ${status}\nAction: ${action}\nResource: ${resource}${reasonLine}\n\nFull response:\n${JSON.stringify(result, null, 2)}` }],
+        content: [{ type: 'text', text: `Policy check: ${status}\nAction: ${action}\nResource: ${resource}${reasonLine}${violationsLines}` }],
       }
     } catch (err) {
       return {
