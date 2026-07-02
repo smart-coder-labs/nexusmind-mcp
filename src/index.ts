@@ -14,7 +14,7 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -149,115 +149,82 @@ server.tool(
   }
 )
 
-// search_memory
+// search_memories — unified read tool: semantic search when query is present, plain
+// filtered browse/list when it is absent. Absorbs search_memory, search_memories_advanced,
+// list_memories, get_memory_timeline, get_session_memories.
 server.tool(
-  'search_memory',
-  'Semantic search over team memories for a specific past decision, fix, convention, or discovery. Pass a query describing what you need, not a bare project/repo name — for whole-project context use get_context or list_memories instead.',
+  'search_memories',
+  'Search or browse team memories. Pass query for semantic search; omit it to list/browse with filters (project, type, tags, date range, session).',
   {
-    query:         z.string().describe('Semantic description of what you need, not a project/repo name'),
-    limit:         z.number().int().min(1).max(50).optional().describe('Max results to return (default: 10)'),
-    collection_id: z.string().optional().describe('Filter results to a specific collection ID'),
-    pinned:        z.boolean().optional().describe('When true, return only pinned memories'),
-    archived:      z.boolean().optional().describe('When true, include archived memories in results (default: false)'),
-  },
-  async ({ query, limit, collection_id, pinned, archived }) => {
-    try {
-      const memories = await searchMemories({ query, limit: limit ?? 10, collection_id, pinned, archived })
-      const text = memories.length === 0
-        ? `No memories found for query: "${query}"`
-        : `Found ${memories.length} result(s) for "${query}":\n\n${formatList(memories)}`
-      return { content: [{ type: 'text', text }] }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
-    }
-  }
-)
-
-// search_memories_advanced
-server.tool(
-  'search_memories_advanced',
-  'Advanced memory search with date range, tag matching mode (any/all), project filter, and pinned filter. More powerful than search_memory.',
-  {
-    query:            z.string().optional().describe('Search query'),
-    tags:             z.array(z.string()).optional().describe('Filter by tags'),
-    tag_mode:         z.enum(['any', 'all']).optional().describe('"any" (default) or "all" tags must match'),
+    query:            z.string().optional().describe('Semantic search text — omit to list/browse instead'),
     project:          z.string().optional().describe('Filter by project name'),
+    type:             typeEnum,
+    scope:            z.enum(['project', 'personal']).optional().describe('Filter by scope'),
+    session_id:       z.string().optional().describe('Filter by session ID'),
     since:            z.string().optional().describe('ISO date — only memories on/after this date'),
     until:            z.string().optional().describe('ISO date — only memories on/before this date'),
+    tags:             z.array(z.string()).optional().describe('Filter by tags'),
+    tag_mode:         z.enum(['any', 'all']).optional().describe('"any" (default) or "all" tags must match'),
     pinned:           z.boolean().optional().describe('When true, return only pinned memories'),
+    include_archived: z.boolean().optional().describe('Include archived memories (default: false)'),
+    sort:             z.enum(['created_at']).optional().describe('created_at for timeline ordering'),
     limit:            z.number().int().min(1).max(100).optional().describe('Max results (default: 20)'),
-    include_archived: z.boolean().optional().describe('When true, include archived memories in results (default: false)'),
   },
   async (input) => {
     try {
       const requestedLimit = input.limit ?? 20
-      // Client-side filters (date/project/tag_mode) run AFTER the backend result set — if we
-      // ask the backend for only `requestedLimit` results, filtering can silently under-return
-      // even when more matches exist. Fetch the backend max instead whenever a client-side
-      // filter is present, then slice to the requested limit ourselves.
-      const hasClientSideFilter = Boolean(
-        input.since || input.until || input.project || (input.tags?.length && input.tag_mode === 'all')
-      )
       const BACKEND_MAX_LIMIT = 100
-      const results = await searchMemories({
-        query: input.query ?? '',
-        limit: hasClientSideFilter ? BACKEND_MAX_LIMIT : requestedLimit,
-        pinned: input.pinned,
-        archived: input.include_archived,
-      })
+      // Client-side filters run AFTER the backend result set — if we ask the backend for
+      // only `requestedLimit` results, filtering can silently under-return even when more
+      // matches exist. Fetch the backend max instead whenever a client-side filter is
+      // present, then slice to the requested limit ourselves.
+      const listModePinnedFilter = !input.query && input.pinned !== undefined
+      const hasClientSideFilter = Boolean(
+        input.since || input.until || input.tags?.length || listModePinnedFilter
+      )
+      const fetchLimit = hasClientSideFilter ? BACKEND_MAX_LIMIT : requestedLimit
 
-      let filtered = results ?? []
-
-      // Date filter
-      if (input.since) filtered = filtered.filter((m: any) => m.created_at >= input.since!)
-      if (input.until) filtered = filtered.filter((m: any) => m.created_at <= input.until! + 'T23:59:59')
-
-      // Project filter
-      if (input.project) filtered = filtered.filter((m: any) => m.project === input.project)
-
-      // Tag mode 'all' — ALL specified tags must be present
-      if (input.tags?.length && input.tag_mode === 'all') {
-        filtered = filtered.filter((m: any) =>
-          input.tags!.every(t => m.tags?.includes(t))
-        )
+      let results: Memory[]
+      if (input.query) {
+        results = await searchMemories({
+          query: input.query,
+          limit: fetchLimit,
+          pinned: input.pinned,
+          archived: input.include_archived,
+        })
+        if (input.project)    results = results.filter(m => m.project === input.project)
+        if (input.type)       results = results.filter(m => m.type === input.type)
+        if (input.scope)      results = results.filter(m => m.scope === input.scope)
+        if (input.session_id) results = results.filter((m: any) => m.session_id === input.session_id)
+        if (input.since)      results = results.filter(m => m.created_at >= input.since!)
+        if (input.until)      results = results.filter(m => m.created_at <= input.until! + 'T23:59:59')
+      } else {
+        results = await listMemories({
+          project:    input.project,
+          type:       input.type,
+          scope:      input.scope,
+          session_id: input.session_id,
+          since:      input.since,
+          until:      input.until,
+          sort:       input.sort,
+          limit:      fetchLimit,
+        })
+        // Defensive client-side filters — the list endpoint may not support these natively.
+        if (input.pinned !== undefined) results = results.filter((m: any) => Boolean(m.pinned) === input.pinned)
+        if (!input.include_archived)    results = results.filter((m: any) => !m.archived_at)
       }
 
-      if (hasClientSideFilter) filtered = filtered.slice(0, requestedLimit)
-
-      const text = filtered.map((m: any) =>
-        `[${m.id}] ${m.content.slice(0, 150)}… (tags: ${m.tags?.join(', ') || 'none'}, created: ${m.created_at?.slice(0, 10)})`
-      ).join('\n') || 'No memories found'
-
-      return { content: [{ type: 'text', text }] }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
+      if (input.tags?.length) {
+        results = input.tag_mode === 'all'
+          ? results.filter(m => input.tags!.every(t => m.tags?.includes(t)))
+          : results.filter(m => m.tags?.some(t => input.tags!.includes(t)))
       }
-    }
-  }
-)
 
-// list_memories
-server.tool(
-  'list_memories',
-  'Browse recent memories filtered by project, type, or scope. Prefer search_memory when you have keywords; use this for exploring or auditing recent activity.',
-  {
-    project: z.string().optional().describe('Filter by project name'),
-    type:    typeEnum,
-    scope:   z.enum(['project', 'personal']).optional().describe('Filter by scope'),
-    tool:    z.string().optional().describe('Filter by tool (e.g. "claude-code", "cursor")'),
-    limit:   z.number().int().min(1).max(100).optional().describe('Max results (default: 20)'),
-  },
-  async ({ project, type, scope, tool, limit }) => {
-    try {
-      const memories = await listMemories({ project, type, scope, tool, limit: limit ?? 20 })
-      const text = memories.length === 0
-        ? 'No memories found.'
-        : `${memories.length} recent memory(ies):\n\n${formatList(memories)}`
+      if (hasClientSideFilter) results = results.slice(0, requestedLimit)
+
+      const text = results.length === 0
+        ? (input.query ? `No memories found for query: "${input.query}"` : 'No memories found.')
+        : `${results.length} memory(ies)${input.query ? ` for "${input.query}"` : ''}:\n\n${formatList(results)}`
       return { content: [{ type: 'text', text }] }
     } catch (err) {
       return {
@@ -406,9 +373,9 @@ server.tool(
 // get_memory — full untruncated content by id
 server.tool(
   'get_memory',
-  'Fetch FULL untruncated content for a single memory by id. search_memory and list_memories return previews (often 120-300 chars); when you need to act on or quote the full record, call get_memory(id). Use the id returned by search_memory.',
+  'Fetch FULL untruncated content for a single memory by id. search_memories returns previews (often 120-300 chars); when you need to act on or quote the full record, call get_memory(id).',
   {
-    id: z.string().describe('The memory id (returned by search_memory or list_memories)'),
+    id: z.string().describe('The memory id (returned by search_memories)'),
   },
   async ({ id }) => {
     try {
@@ -756,7 +723,7 @@ server.tool(
   'update_memory',
   'Update the content, tags, or metadata of an existing memory by ID. Call when you want to revise what was stored without creating a duplicate — preferred over delete+store for corrections or enrichments.',
   {
-    id:       z.string().describe('The memory ID to update (returned by search_memory or list_memories)'),
+    id:       z.string().describe('The memory ID to update (returned by search_memories)'),
     content:  z.string().optional().describe('New full content for the memory'),
     tags:     z.array(z.string()).optional().describe('Replacement tag list (overwrites existing tags)'),
     metadata: z.record(z.unknown()).optional().describe('Arbitrary metadata key/value pairs to merge into the memory'),
@@ -2578,32 +2545,6 @@ server.tool(
   }
 )
 
-// get_session_memories
-server.tool(
-  'get_session_memories',
-  'Get all memories that belong to a specific session. Use this to review what was captured during a work session.',
-  {
-    session_id: z.string().describe('The session ID to retrieve memories for'),
-    limit:      z.number().int().min(1).max(200).optional().describe('Max memories to return (default: 50)'),
-  },
-  async ({ session_id, limit }) => {
-    try {
-      const memories = await getSessionMemories({ session_id, limit: limit ?? 50 })
-      if (memories.length === 0) {
-        return { content: [{ type: 'text', text: `No memories found for session ${session_id}.` }] }
-      }
-      return {
-        content: [{ type: 'text', text: `${memories.length} memory(ies) in session ${session_id}:\n\n${formatList(memories)}` }],
-      }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
-    }
-  }
-)
-
 // create_session
 server.tool(
   'create_session',
@@ -2861,34 +2802,6 @@ server.tool(
       }
       return {
         content: [{ type: 'text', text: `Tagged ${ids.length} memories with [${add_tags.join(', ')}]` }],
-      }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
-    }
-  }
-)
-
-// get_memory_timeline
-server.tool(
-  'get_memory_timeline',
-  'Get memories in chronological order, optionally filtered by date range. Useful for reviewing what was captured during a time period.',
-  {
-    since: z.string().optional().describe('Start of the date range as an ISO 8601 string (e.g. "2025-01-01T00:00:00Z")'),
-    until: z.string().optional().describe('End of the date range as an ISO 8601 string (e.g. "2025-12-31T23:59:59Z")'),
-    limit: z.number().int().min(1).max(200).optional().describe('Max memories to return (default: 50)'),
-  },
-  async ({ since, until, limit }) => {
-    try {
-      const memories = await getMemoryTimeline({ since, until, limit: limit ?? 50 })
-      if (memories.length === 0) {
-        const rangeDesc = since || until ? ` in the given date range` : ''
-        return { content: [{ type: 'text', text: `No memories found${rangeDesc}.` }] }
-      }
-      return {
-        content: [{ type: 'text', text: `${memories.length} memory(ies) in timeline:\n\n${formatList(memories)}` }],
       }
     } catch (err) {
       return {
@@ -3195,7 +3108,7 @@ server.tool(
         '',
         '## Quick Start',
         '- Use `store_memory` to save important decisions and discoveries',
-        '- Use `search_memory` to find relevant past context',
+        '- Use `search_memories` to find relevant past context',
         '- Use `get_context` for full project knowledge (grouped by type)',
         '- Use `check_convention_compliance` to verify your work follows team conventions',
         '- Use `list_conventions` to see all team conventions with weights',

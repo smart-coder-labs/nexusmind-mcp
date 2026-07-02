@@ -133,14 +133,22 @@ export function listMemories(params: {
   tool?: string
   type?: MemoryType
   scope?: MemoryScope
+  session_id?: string
+  since?: string
+  until?: string
+  sort?: string
   limit?: number
 } = {}): Promise<Memory[]> {
   const qs = new URLSearchParams()
-  if (params.project) qs.set('project', params.project)
-  if (params.tool)    qs.set('tool',    params.tool)
-  if (params.type)    qs.set('type',    params.type)
-  if (params.scope)   qs.set('scope',   params.scope)
-  if (params.limit)   qs.set('limit',   String(params.limit))
+  if (params.project)    qs.set('project',    params.project)
+  if (params.tool)       qs.set('tool',       params.tool)
+  if (params.type)       qs.set('type',       params.type)
+  if (params.scope)      qs.set('scope',      params.scope)
+  if (params.session_id) qs.set('session_id', params.session_id)
+  if (params.since)      qs.set('since',      params.since)
+  if (params.until)      qs.set('until',      params.until)
+  if (params.sort)       qs.set('sort',       params.sort)
+  if (params.limit)      qs.set('limit',      String(params.limit))
   return request<Memory[] | { memories?: Memory[] }>(`/v1/memory?${qs}`)
     .then(res => Array.isArray(res) ? res : (res?.memories ?? []))
 }
@@ -979,39 +987,11 @@ export function deleteSession(id: string): Promise<void> {
   return request<void>(`/v1/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
-export interface GetSessionMemoriesInput {
-  session_id: string
-  limit?: number
-}
-
-export function getSessionMemories(input: GetSessionMemoriesInput): Promise<Memory[]> {
-  const qs = new URLSearchParams({ session_id: input.session_id })
-  if (input.limit !== undefined) qs.set('limit', String(input.limit))
-  return request<Memory[]>(`/v1/memory?${qs}`)
-}
-
 export function createSession(data: { summary?: string; description?: string } = {}): Promise<Session> {
   return request<Session>('/v1/sessions', {
     method: 'POST',
     body: JSON.stringify(data),
   })
-}
-
-// ── Memory Timeline ───────────────────────────────────────────────────────────
-
-export interface MemoryTimelineInput {
-  since?: string
-  until?: string
-  limit?: number
-}
-
-export function getMemoryTimeline(input: MemoryTimelineInput = {}): Promise<Memory[]> {
-  const qs = new URLSearchParams()
-  qs.set('sort', 'created_at')
-  if (input.limit !== undefined) qs.set('limit', String(input.limit))
-  if (input.since) qs.set('since', input.since)
-  if (input.until) qs.set('until', input.until)
-  return request<Memory[]>(`/v1/memory?${qs}`)
 }
 
 // ── Convention Pin ────────────────────────────────────────────────────────────
