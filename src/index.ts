@@ -69,14 +69,12 @@ const MEMORY_TYPES = [
   'project', 'session_summary', 'feature', 'refactoring', 'manual',
 ] as const
 
-const typeEnum = z.enum(MEMORY_TYPES).optional().describe(
-  'Memory type — architecture | bugfix | decision | discovery | config | pattern | feedback | preference | project | session_summary | feature | refactoring | manual'
-)
+const typeEnum = z.enum(MEMORY_TYPES).optional().describe('Memory type (see enum values)')
 
 // store_memory
 server.tool(
   'store_memory',
-  'ALWAYS call immediately after ANY decision, bug fix, convention, or non-obvious discovery — do NOT wait to be asked. Mandatory in practice: title (verb + what), type (architecture | bugfix | decision | discovery | config | pattern | feedback | preference | project | session_summary | feature | refactoring | manual), and project. Call this BEFORE moving to the next task.',
+  'Call immediately after any decision, bug fix, convention, or non-obvious discovery. Requires title (verb + what), type, and project. Call before moving to the next task.',
   {
     content:       z.string().describe('Full memory content (decision rationale, bug root cause, discovery, etc.)'),
     title:         z.string().optional().describe('Short searchable title (e.g. "Fixed N+1 query in UserList")'),
@@ -154,9 +152,9 @@ server.tool(
 // search_memory
 server.tool(
   'search_memory',
-  "Semantic search over team memories. Pass a query that describes the SPECIFIC information you need — e.g. \"how auth tokens are validated\", \"why we chose Postgres\", \"deploy pipeline config\". Do NOT pass a bare project/repo name: this is a semantic search, so a project name returns noise, not that project's context. To load a whole project's context, use get_context(project) or list_memories(project) instead. Use search_memory when you're looking for a particular past decision, fix, convention, or discovery.",
+  'Semantic search over team memories for a specific past decision, fix, convention, or discovery. Pass a query describing what you need, not a bare project/repo name — for whole-project context use get_context or list_memories instead.',
   {
-    query:         z.string().describe('A semantic description of what you need (e.g. "authentication flow", "database connection pool", "rate limit config"). NOT a project or repo name — use get_context/list_memories for whole-project context.'),
+    query:         z.string().describe('Semantic description of what you need, not a project/repo name'),
     limit:         z.number().int().min(1).max(50).optional().describe('Max results to return (default: 10)'),
     collection_id: z.string().optional().describe('Filter results to a specific collection ID'),
     pinned:        z.boolean().optional().describe('When true, return only pinned memories'),
@@ -183,14 +181,14 @@ server.tool(
   'search_memories_advanced',
   'Advanced memory search with date range, tag matching mode (any/all), project filter, and pinned filter. More powerful than search_memory.',
   {
-    query:            z.string().optional().describe('Search query (e.g. "authentication", "database pool")'),
+    query:            z.string().optional().describe('Search query'),
     tags:             z.array(z.string()).optional().describe('Filter by tags'),
-    tag_mode:         z.enum(['any', 'all']).optional().describe('Tag matching mode — "any" (default) or "all" (all tags must be present)'),
+    tag_mode:         z.enum(['any', 'all']).optional().describe('"any" (default) or "all" tags must match'),
     project:          z.string().optional().describe('Filter by project name'),
-    since:            z.string().optional().describe('ISO date — only memories created on or after this date (e.g. "2025-01-01")'),
-    until:            z.string().optional().describe('ISO date — only memories created on or before this date (e.g. "2025-12-31")'),
+    since:            z.string().optional().describe('ISO date — only memories on/after this date'),
+    until:            z.string().optional().describe('ISO date — only memories on/before this date'),
     pinned:           z.boolean().optional().describe('When true, return only pinned memories'),
-    limit:            z.number().int().min(1).max(100).optional().describe('Max results to return (default: 20)'),
+    limit:            z.number().int().min(1).max(100).optional().describe('Max results (default: 20)'),
     include_archived: z.boolean().optional().describe('When true, include archived memories in results (default: false)'),
   },
   async (input) => {
@@ -246,7 +244,7 @@ server.tool(
 // list_memories
 server.tool(
   'list_memories',
-  'Utility browse for recent memories, optionally filtered by project, type, or scope. Prefer search_memory when you have keywords. Use list_memories only when exploring the project or auditing recent activity.',
+  'Browse recent memories filtered by project, type, or scope. Prefer search_memory when you have keywords; use this for exploring or auditing recent activity.',
   {
     project: z.string().optional().describe('Filter by project name'),
     type:    typeEnum,
@@ -274,12 +272,12 @@ server.tool(
 // rules, notepads, or any tool that injects context at session start.
 server.tool(
   'get_context',
-  'Call at the START of every session that involves significant work. Returns all team knowledge grouped by type — architecture, decisions, patterns, bugs fixed, discoveries. Also returns conventions from GET /v1/conventions — these are team-wide rules with higher authority than memories. This is the canonical bootstrap for nexus-mind work; do not skip it on substantial sessions.',
+  'Call at the START of any significant session. Returns team knowledge grouped by type (architecture, decisions, patterns, bugs, discoveries) plus team conventions, which carry higher authority than memories. Canonical bootstrap — do not skip it.',
   {
-    project:              z.string().optional().describe('Project to fetch context for. Omit for all projects.'),
-    limit:                z.number().int().min(1).max(100).optional().describe('Max memories to include (default: 40)'),
-    include_conventions:  z.boolean().optional().describe('Include team conventions in the output (default: true)'),
-    include_memories:     z.boolean().optional().describe('Include memories in the output (default: true)'),
+    project:              z.string().optional().describe('Project to fetch context for; omit for all projects'),
+    limit:                z.number().int().min(1).max(100).optional().describe('Max memories (default: 40)'),
+    include_conventions:  z.boolean().optional().describe('Include team conventions (default: true)'),
+    include_memories:     z.boolean().optional().describe('Include memories (default: true)'),
   },
   async ({ project, limit, include_conventions, include_memories }) => {
     try {
@@ -499,11 +497,11 @@ function formatCodeChunk(c: CodeChunk, index: number): string {
 // index_project
 server.tool(
   'index_project',
-  'Call BEFORE any semantic code search on a project that has not been indexed yet, or when code has changed significantly. Walks the project root, chunks source files by symbol, embeds them, and persists to the code index. Takes the absolute path to the project root.',
+  'Call before any semantic code search on an unindexed project, or when code has changed significantly. Chunks source files by symbol, embeds them, and persists to the code index.',
   {
-    project:    z.string().describe('Logical project name used as the search scope key (e.g. "nexusmind-backend")'),
+    project:    z.string().describe('Logical project name used as the search scope key'),
     root_path:  z.string().describe('Absolute path to the project root directory to index'),
-    extensions: z.array(z.string()).optional().describe('File extensions to include (e.g. [".ts", ".rs"]). Defaults to common code extensions.'),
+    extensions: z.array(z.string()).optional().describe('File extensions to include (defaults to common code extensions)'),
   },
   async ({ project, root_path, extensions }) => {
     try {
@@ -526,11 +524,11 @@ server.tool(
 // search_code
 server.tool(
   'search_code',
-  'Primary tool for understanding a codebase semantically. Call to find where something is defined, how a pattern is implemented, or what code handles a specific concern — WITHOUT reading files manually. Requires the project to be indexed first via index_project.',
+  'Primary tool for understanding a codebase semantically — find where something is defined, how a pattern is implemented, or what handles a concern, without reading files manually. Requires index_project first.',
   {
-    query:   z.string().describe('Natural language or code description of what to find (e.g. "user authentication logic", "database connection pool setup")'),
-    project: z.string().describe('Project key to search within — must match the key used in index_project'),
-    limit:   z.number().int().min(1).max(20).optional().describe('Max results to return (default: 10, max: 20)'),
+    query:   z.string().describe('Natural language or code description of what to find'),
+    project: z.string().describe('Project key — must match the key used in index_project'),
+    limit:   z.number().int().min(1).max(20).optional().describe('Max results (default: 10, max: 20)'),
   },
   async ({ query, project, limit }) => {
     try {
@@ -1547,11 +1545,11 @@ server.tool(
   'update_project',
   'Update project settings: description, custom AI instructions, data retention policy, or archive status.',
   {
-    id:                  z.string().describe('The project ID to update (returned by list_projects)'),
+    id:                  z.string().describe('Project ID to update (returned by list_projects)'),
     description:         z.string().optional().describe('New description for the project'),
-    custom_instructions: z.string().optional().describe('Custom AI instructions injected into agent context for this project'),
-    retention_days:      z.number().int().min(0).optional().describe('Number of days to retain memories for this project (0 = retain forever)'),
-    archived:            z.boolean().optional().describe('Set to true to archive the project, false to restore it'),
+    custom_instructions: z.string().optional().describe('Custom AI instructions injected into agent context'),
+    retention_days:      z.number().int().min(0).optional().describe('Days to retain memories (0 = forever)'),
+    archived:            z.boolean().optional().describe('true to archive, false to restore'),
   },
   async ({ id, description, custom_instructions, retention_days, archived }) => {
     try {
@@ -3218,16 +3216,16 @@ server.tool(
 // record_decision
 server.tool(
   'record_decision',
-  'Record an Architecture Decision Record (ADR). Stores a structured decision with context, options, rationale, and consequences. Ideal for capturing important technical choices.',
+  'Record an Architecture Decision Record (ADR) — a structured decision with context, options, rationale, and consequences.',
   {
-    title:               z.string().describe('Short title for the decision (e.g. "Use PostgreSQL instead of SQLite")'),
-    context:             z.string().describe('Why this decision was needed — the problem or situation that prompted it'),
-    options_considered:  z.array(z.string()).min(1).describe('List of options that were evaluated (e.g. ["PostgreSQL", "SQLite", "MongoDB"])'),
+    title:               z.string().describe('Short title for the decision'),
+    context:             z.string().describe('Why this decision was needed'),
+    options_considered:  z.array(z.string()).min(1).describe('Options that were evaluated'),
     decision:            z.string().describe('What was chosen'),
-    rationale:           z.string().describe('Why this option was chosen over the alternatives'),
-    consequences:        z.string().optional().describe('What changes, risks, or follow-up work this decision entails'),
-    project:             z.string().optional().describe('Project or repo name (e.g. "nexusmind", "payments-api")'),
-    tags:                z.array(z.string()).optional().describe('Additional tags for filtering (e.g. ["database", "infrastructure"])'),
+    rationale:           z.string().describe('Why this option won over the alternatives'),
+    consequences:        z.string().optional().describe('Changes, risks, or follow-up work this entails'),
+    project:             z.string().optional().describe('Project or repo name'),
+    tags:                z.array(z.string()).optional().describe('Additional tags for filtering'),
   },
   async ({ title, context, options_considered, decision, rationale, consequences, project, tags }) => {
     try {
@@ -3688,14 +3686,14 @@ server.tool(
 // sync_agent_context
 server.tool(
   'sync_agent_context',
-  'Save the current agent session context to NexusMind as reusable memories. Use this at the end of a work session or when you\'ve made important discoveries that should persist.',
+  'Save the current agent session context to NexusMind as reusable memories — use at the end of a session or after important discoveries.',
   {
     discoveries: z.array(z.object({
       title: z.string().describe('Short title for this discovery/decision'),
       content: z.string().describe('Full content of what was learned'),
       tags: z.array(z.string()).optional().describe('Tags to categorize this memory'),
-    })).describe('List of discoveries, decisions, or insights to persist'),
-    session_summary: z.string().optional().describe('Optional high-level summary of the work session'),
+    })).describe('Discoveries, decisions, or insights to persist'),
+    session_summary: z.string().optional().describe('High-level summary of the work session'),
     project_context: z.string().optional().describe('Project name or context identifier'),
   },
   async (input) => {
