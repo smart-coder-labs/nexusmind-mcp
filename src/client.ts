@@ -68,6 +68,11 @@ export interface Memory {
   tags: string[]
   revision_count: number
   created_at: string
+  updated_at?: string
+  pinned?: boolean
+  archived_at?: string | null
+  session_id?: string
+  collection_id?: string
 }
 
 export interface StoreMemoryInput {
@@ -138,17 +143,21 @@ export function listMemories(params: {
   until?: string
   sort?: string
   limit?: number
+  collection_id?: string
+  include_archived?: boolean
 } = {}): Promise<Memory[]> {
   const qs = new URLSearchParams()
-  if (params.project)    qs.set('project',    params.project)
-  if (params.tool)       qs.set('tool',       params.tool)
-  if (params.type)       qs.set('type',       params.type)
-  if (params.scope)      qs.set('scope',      params.scope)
-  if (params.session_id) qs.set('session_id', params.session_id)
-  if (params.since)      qs.set('since',      params.since)
-  if (params.until)      qs.set('until',      params.until)
-  if (params.sort)       qs.set('sort',       params.sort)
-  if (params.limit)      qs.set('limit',      String(params.limit))
+  if (params.project)          qs.set('project',          params.project)
+  if (params.tool)             qs.set('tool',             params.tool)
+  if (params.type)             qs.set('type',             params.type)
+  if (params.scope)            qs.set('scope',            params.scope)
+  if (params.session_id)       qs.set('session_id',       params.session_id)
+  if (params.since)            qs.set('since',            params.since)
+  if (params.until)            qs.set('until',            params.until)
+  if (params.sort)             qs.set('sort',             params.sort)
+  if (params.limit)            qs.set('limit',            String(params.limit))
+  if (params.collection_id)    qs.set('collection_id',    params.collection_id)
+  if (params.include_archived) qs.set('include_archived', String(params.include_archived))
   return request<Memory[] | { memories?: Memory[] }>(`/v1/memory?${qs}`)
     .then(res => Array.isArray(res) ? res : (res?.memories ?? []))
 }
