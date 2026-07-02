@@ -15,7 +15,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject } from './client.js'
-import type { Memory, CodeSearchResult, CodeChunk, Session } from './client.js'
+import type { Memory, CodeSearchResult, CodeChunk, Session, Convention } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -35,6 +35,25 @@ function formatMemory(m: Memory): string {
 function formatList(memories: Memory[]): string {
   if (memories.length === 0) return 'No memories found.'
   return memories.map(formatMemory).join('\n')
+}
+
+interface FormatConventionOpts {
+  index?: number
+  showWeight?: boolean
+  contentChars?: number
+  multiline?: boolean
+}
+
+function formatConvention(c: Convention, opts: FormatConventionOpts = {}): string {
+  const title = c.title ?? `Convention ${c.id}`
+  const cat   = c.category ? ` [${c.category}]` : ''
+  const weightLabel = opts.showWeight ? `[${(c as any).weight ?? 0}] ` : ''
+  const idxLabel    = opts.index != null ? `[${opts.index}] ` : ''
+  const header = `${weightLabel}${idxLabel}${title}${cat} (id: ${c.id})`
+  if (opts.contentChars === 0) return header
+  const chars = opts.contentChars ?? 120
+  const snippet = c.content.slice(0, chars).split('\n')[0]
+  return opts.multiline ? `${header}\n    ${snippet}` : `${header}: ${snippet}`
 }
 
 // ── Server ───────────────────────────────────────────────────────────────────
@@ -362,11 +381,7 @@ server.tool(
         const filter = category ? ` for category "${category}"` : ''
         return { content: [{ type: 'text', text: `No conventions found${filter}.` }] }
       }
-      const lines = conventions.map(c => {
-        const weight = (c as any).weight ?? 0
-        const title  = c.title ?? `Convention ${c.id}`
-        return `[${weight}] ${title}: ${c.content.slice(0, 200)}`
-      })
+      const lines = conventions.map(c => formatConvention(c, { showWeight: true, contentChars: 200 }))
       return {
         content: [{ type: 'text', text: lines.join('\n') }],
       }
@@ -995,11 +1010,7 @@ server.tool(
         const filter = category ? ` for category "${category}"` : ''
         return { content: [{ type: 'text', text: `No conventions found${filter}.` }] }
       }
-      const lines = conventions.map((c, i) => {
-        const title = c.title ?? `Convention ${c.id}`
-        const cat   = c.category ? ` [${c.category}]` : ''
-        return `[${i + 1}] ${title}${cat} (id: ${c.id})\n    ${c.content.split('\n')[0].slice(0, 120)}`
-      })
+      const lines = conventions.map((c, i) => formatConvention(c, { index: i + 1, multiline: true }))
       return {
         content: [{ type: 'text', text: `${conventions.length} convention(s):\n\n${lines.join('\n\n')}` }],
       }
@@ -2412,11 +2423,7 @@ server.tool(
         if (category) parts.push(`in category "${category}"`)
         return { content: [{ type: 'text', text: `No conventions found${parts.length ? ' ' + parts.join(' ') : ''}.` }] }
       }
-      const lines = filtered.map((c, i) => {
-        const title = c.title ?? `Convention ${c.id}`
-        const cat   = c.category ? ` [${c.category}]` : ''
-        return `[${i + 1}] ${title}${cat} (id: ${c.id})\n    ${c.content.split('\n')[0].slice(0, 120)}`
-      })
+      const lines = filtered.map((c, i) => formatConvention(c, { index: i + 1, multiline: true }))
       return {
         content: [{ type: 'text', text: `${filtered.length} convention(s):\n\n${lines.join('\n\n')}` }],
       }
@@ -2862,7 +2869,7 @@ server.tool(
   async ({ id }) => {
     try {
       const conv = await pinConvention(id)
-      const label = conv.title ? `"${conv.title}"` : `id: ${conv.id}`
+      const label = formatConvention(conv, { contentChars: 0 })
       return {
         content: [{ type: 'text', text: `Convention pinned to weight 999 (${label})` }],
       }
