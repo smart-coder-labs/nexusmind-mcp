@@ -58,7 +58,10 @@ function writeJson(path: string, data: Record<string, unknown>) {
 function mcpEntry() {
   return {
     command: 'npx',
-    args: ['-y', '@smart-coder-labs/nexusmind-mcp'],
+    // Pin @latest so npx re-resolves on every startup instead of reusing a stale
+    // cached version — otherwise published updates never reach the user until they
+    // manually clear the npx cache.
+    args: ['-y', '@smart-coder-labs/nexusmind-mcp@latest'],
     env: {
       NEXUSMIND_API_KEY: '${NEXUSMIND_API_KEY}',
       NEXUSMIND_BASE_URL: '${NEXUSMIND_BASE_URL}',
