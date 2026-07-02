@@ -152,8 +152,9 @@ export function listMemories(params: {
   if (params.type)             qs.set('type',             params.type)
   if (params.scope)            qs.set('scope',            params.scope)
   if (params.session_id)       qs.set('session_id',       params.session_id)
-  if (params.since)            qs.set('since',            params.since)
-  if (params.until)            qs.set('until',            params.until)
+  // GET /v1/memory deserializes date bounds as from_date/to_date; `since`/`until` are silently dropped
+  if (params.since)            qs.set('from_date',        params.since)
+  if (params.until)            qs.set('to_date',          params.until)
   if (params.sort)             qs.set('sort',             params.sort)
   if (params.limit)            qs.set('limit',            String(params.limit))
   if (params.collection_id)    qs.set('collection_id',    params.collection_id)
