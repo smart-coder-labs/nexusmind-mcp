@@ -71,7 +71,7 @@ const MEMORY_TYPES = [
 
 const typeEnum = z.enum(MEMORY_TYPES).optional().describe('Memory type (see enum values)')
 
-// store_memory
+// store_memory — auto_tag ports smart_store_memory's regex-based tag detection.
 server.tool(
   'store_memory',
   'Call immediately after any decision, bug fix, convention, or non-obvious discovery. Requires title (verb + what), type, and project. Call before moving to the next task.',
@@ -86,59 +86,29 @@ server.tool(
     tags:          z.array(z.string()).optional().describe('Tags for filtering (e.g. ["auth", "convention"])'),
     session_id:    z.string().optional().describe('Session ID to link this memory to a session'),
     collection_id: z.string().optional().describe('Collection ID to assign the memory to on creation'),
+    auto_tag:      z.boolean().optional().describe('Auto-detect tags from content (bugfix, decision, feature, discovery, refactor, testing) and merge with tags'),
   },
-  async ({ content, title, type, topic_key, scope, project, tool, tags, session_id, collection_id }) => {
+  async ({ content, title, type, topic_key, scope, project, tool, tags, session_id, collection_id, auto_tag }) => {
     try {
-      const res = await storeMemory({ content, title, type, topic_key, scope, project, tool, tags, session_id, collection_id })
-      const label = title ? `"${title}"` : `id: ${res.id}`
-      return {
-        content: [{ type: 'text', text: `Memory stored (${label})` }],
-      }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
-    }
-  }
-)
-
-// smart_store_memory
-server.tool(
-  'smart_store_memory',
-  'Store a memory with automatic type detection and tagging. Analyzes the content to suggest tags (bugfix, decision, feature, discovery, etc.) before storing.',
-  {
-    content:    z.string().describe('Full memory content to classify and store'),
-    project:    z.string().optional().describe('Project or repo name (e.g. "nexusmind", "payments-api")'),
-    session_id: z.string().optional().describe('Session ID to link this memory to a session'),
-    extra_tags: z.array(z.string()).optional().describe('Additional tags to include alongside auto-detected ones'),
-  },
-  async ({ content, project, session_id, extra_tags }) => {
-    try {
-      const lower = content.toLowerCase()
+      let finalTags = tags
       const autoTags: string[] = []
 
-      if (/fix(ed|ing)?|bug|error|crash|broken|resolv/i.test(lower)) autoTags.push('bugfix')
-      if (/decid(ed|ing)?|chose|option|alternative|tradeoff|because/i.test(lower)) autoTags.push('decision')
-      if (/add(ed|ing)?|implement(ed|ing)?|built|creat(ed|ing)?|new feature/i.test(lower)) autoTags.push('feature')
-      if (/found|discover(ed|y)?|learn(ed|ing)?|realized|turns out|gotcha|note:/i.test(lower)) autoTags.push('discovery')
-      if (/refactor(ed|ing)?|moved|reorganiz(ed|ing)?|renamed|extract(ed|ing)?/i.test(lower)) autoTags.push('refactor')
-      if (/test(ed|ing)?|spec|coverage|unit|integration/i.test(lower)) autoTags.push('testing')
+      if (auto_tag) {
+        const lower = content.toLowerCase()
+        if (/fix(ed|ing)?|bug|error|crash|broken|resolv/i.test(lower)) autoTags.push('bugfix')
+        if (/decid(ed|ing)?|chose|option|alternative|tradeoff|because/i.test(lower)) autoTags.push('decision')
+        if (/add(ed|ing)?|implement(ed|ing)?|built|creat(ed|ing)?|new feature/i.test(lower)) autoTags.push('feature')
+        if (/found|discover(ed|y)?|learn(ed|ing)?|realized|turns out|gotcha|note:/i.test(lower)) autoTags.push('discovery')
+        if (/refactor(ed|ing)?|moved|reorganiz(ed|ing)?|renamed|extract(ed|ing)?/i.test(lower)) autoTags.push('refactor')
+        if (/test(ed|ing)?|spec|coverage|unit|integration/i.test(lower)) autoTags.push('testing')
+        finalTags = [...new Set([...autoTags, ...(tags ?? [])])]
+      }
 
-      const allTags = [...new Set([...autoTags, ...(extra_tags ?? [])])]
-
-      const result = await storeMemory({
-        content,
-        tags: allTags,
-        ...(project    ? { project }    : {}),
-        ...(session_id ? { session_id } : {}),
-      })
-
+      const res = await storeMemory({ content, title, type, topic_key, scope, project, tool, tags: finalTags, session_id, collection_id })
+      const label = title ? `"${title}"` : `id: ${res.id}`
+      const autoTagLine = auto_tag ? `\nAuto-detected tags: [${autoTags.join(', ') || 'none'}]` : ''
       return {
-        content: [{
-          type: 'text',
-          text: `Memory stored (id: ${result?.id})\nAuto-detected tags: [${autoTags.join(', ') || 'none'}]\nAll tags: [${allTags.join(', ')}]`,
-        }],
+        content: [{ type: 'text', text: `Memory stored (${label})${autoTagLine}` }],
       }
     } catch (err) {
       return {
