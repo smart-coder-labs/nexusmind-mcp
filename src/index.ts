@@ -2232,13 +2232,13 @@ server.tool(
   }
 )
 
-// rename_tag
+// rename_tag — also used to merge tags: renaming to an existing tag folds the old one into it.
 server.tool(
   'rename_tag',
-  'Rename a tag across all memories in the organization. All memories with old_tag will have it replaced with new_tag.',
+  'Rename a tag across all memories in the organization, replacing old_tag with new_tag. Also doubles as tag merging: if new_tag already exists, old_tag is absorbed into it and removed.',
   {
-    old_tag: z.string().describe('The existing tag name to rename'),
-    new_tag: z.string().describe('The new tag name to replace it with'),
+    old_tag: z.string().describe('The existing tag name to rename (or merge away)'),
+    new_tag: z.string().describe('The new tag name to replace it with (or merge into)'),
   },
   async ({ old_tag, new_tag }) => {
     try {
@@ -2246,31 +2246,6 @@ server.tool(
       const count = result.updated ?? 0
       return {
         content: [{ type: 'text', text: `Tag renamed: "${old_tag}" → "${new_tag}". ${count} memory(ies) updated.` }],
-      }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
-    }
-  }
-)
-
-// merge_tags
-server.tool(
-  'merge_tags',
-  'Merge tag "source" into "target" — all memories tagged with source get retagged to target, and source is removed. Use get_tag_stats to see available tags before merging.',
-  {
-    source: z.string().describe('The tag to absorb and remove (e.g. "auth")'),
-    target: z.string().describe('The tag to merge into — memories from source will carry this tag (e.g. "authentication")'),
-  },
-  async ({ source, target }) => {
-    try {
-      // The rename endpoint absorbs source into target (retags all memories and removes source)
-      const result = await renameTag(source, target)
-      const count = result.updated ?? 0
-      return {
-        content: [{ type: 'text', text: `Tags merged: "${source}" → "${target}". ${count} memory(ies) retagged. Tag "${source}" has been removed.` }],
       }
     } catch (err) {
       return {
