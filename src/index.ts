@@ -14,7 +14,7 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -235,104 +235,179 @@ server.tool(
   }
 )
 
-// get_context — returns team conventions + memories formatted as a context block for Cursor
-// rules, notepads, or any tool that injects context at session start.
+// ── Context builder ─────────────────────────────────────────────────────────
+// Shared by get_context and onboard_agent. Absorbs get_project_context,
+// summarize_project, get_agent_dashboard, and get_agent_context.
+
+interface ContextParams {
+  project?: string
+  mode?: 'compact' | 'full'
+  include_conventions?: boolean
+  include_memories?: boolean
+  include_stats?: boolean
+  include_activity?: boolean
+  limit?: number
+}
+
+function formatMemoryCompact(m: Memory): string {
+  const label = m.title ?? (m.content.length > 80 ? `${m.content.slice(0, 80)}…` : m.content)
+  return `[${m.id}] ${label}`
+}
+
+async function buildContext(params: ContextParams): Promise<string> {
+  const mode = params.mode ?? 'full'
+  const wantConventions = params.include_conventions !== false
+  const wantMemories    = params.include_memories    !== false
+  const wantStats       = params.include_stats === true
+  const wantActivity    = params.include_activity === true
+
+  const [memories, conventions, stats, activity] = await Promise.all([
+    wantMemories    ? listMemories({ project: params.project, limit: params.limit ?? 40 }) : Promise.resolve([]),
+    wantConventions ? listConventions(undefined, undefined, params.project) : Promise.resolve([]),
+    wantStats       ? getStats().catch(() => null) : Promise.resolve(null),
+    wantActivity    ? getAgentActivity().catch(() => []) : Promise.resolve([]),
+  ])
+
+  if (memories.length === 0 && conventions.length === 0 && !stats && activity.length === 0) {
+    return 'No team context found.'
+  }
+
+  const projectLabel = params.project ? ` — ${params.project}` : ''
+
+  if (mode === 'compact') {
+    const lines: string[] = [`## NexusMind Context${projectLabel} (compact)`]
+    if (wantConventions) {
+      lines.push('', `### Conventions (${conventions.length})`)
+      lines.push(conventions.length ? conventions.map(c => formatConvention(c, { contentChars: 0 })).join('\n') : '(none)')
+    }
+    if (wantMemories) {
+      lines.push('', `### Memories (${memories.length})`)
+      lines.push(memories.length ? memories.map(formatMemoryCompact).join('\n') : '(none)')
+    }
+    if (wantStats && stats) {
+      lines.push('', '### Stats', `- Total memories: ${stats.total_memories ?? 'N/A'} · Total users: ${stats.total_users ?? 'N/A'} · Code projects: ${stats.total_code_projects ?? 'N/A'}`)
+    }
+    if (wantActivity) {
+      lines.push('', '### Recent Activity')
+      lines.push(activity.length
+        ? activity.slice(0, 5).map((a: any) => `- ${a.agent ?? a.name ?? '(unknown)'}: ${a.action ?? a.request_count ?? ''}`).join('\n')
+        : '(none)')
+    }
+    return lines.join('\n')
+  }
+
+  // full mode — complete grouped detail
+  const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+  const lines: string[] = [
+    `## NexusMind Team Context${projectLabel}`,
+    `> Last updated: ${date} · ${memories.length} memories · ${conventions.length} conventions`,
+    '',
+  ]
+
+  // Conventions first — they have the highest authority
+  if (wantConventions && conventions.length > 0) {
+    lines.push('=== TEAM CONVENTIONS (FOLLOW THESE FIRST) ===')
+    lines.push('')
+    for (const c of conventions) {
+      const title = c.title ?? `Convention ${c.id}`
+      const cat   = c.category ? ` [${c.category}]` : ''
+      lines.push(`### ${title}${cat}`)
+      lines.push(c.content)
+      lines.push('')
+    }
+    lines.push('')
+  }
+
+  if (wantMemories && memories.length > 0) {
+    // Group by type
+    const groups: Record<string, typeof memories> = {}
+    for (const m of memories) {
+      const key = m.type ?? 'general'
+      groups[key] = groups[key] ?? []
+      groups[key].push(m)
+    }
+
+    const TYPE_LABELS: Record<string, string> = {
+      architecture:    'Architecture & Design',
+      decision:        'Decisions',
+      convention:      'Conventions',
+      pattern:         'Patterns',
+      bugfix:          'Bugs & Fixes',
+      discovery:       'Discoveries',
+      config:          'Configuration',
+      preference:      'Preferences',
+      feature:         'Features',
+      refactoring:     'Refactoring',
+      session_summary: 'Session Summaries',
+      general:         'General',
+    }
+
+    const PRIORITY_ORDER = [
+      'architecture', 'decision', 'convention', 'pattern',
+      'bugfix', 'discovery', 'config', 'feature', 'preference',
+      'refactoring', 'session_summary', 'general',
+    ]
+
+    const sortedKeys = [
+      ...PRIORITY_ORDER.filter(k => groups[k]),
+      ...Object.keys(groups).filter(k => !PRIORITY_ORDER.includes(k)),
+    ]
+
+    lines.push('=== MEMORIES ===')
+    lines.push('')
+
+    for (const key of sortedKeys) {
+      const label = TYPE_LABELS[key] ?? key
+      lines.push(`#### ${label}`)
+      for (const m of groups[key]) {
+        const entry = m.title ?? m.content.split('\n')[0].slice(0, 120)
+        lines.push(`- ${entry}`)
+      }
+      lines.push('')
+    }
+  }
+
+  if (wantStats && stats) {
+    lines.push('=== STATS ===', '')
+    lines.push(`- Total memories: ${stats.total_memories ?? 'N/A'}`)
+    lines.push(`- Total users: ${stats.total_users ?? 'N/A'}`)
+    lines.push(`- Total code projects: ${stats.total_code_projects ?? 'N/A'}`)
+    lines.push('')
+  }
+
+  if (wantActivity) {
+    lines.push('=== RECENT ACTIVITY ===', '')
+    if (activity.length > 0) {
+      for (const a of activity.slice(0, 10) as any[]) {
+        lines.push(`- ${a.agent ?? a.name ?? '(unknown)'}: ${a.action ?? a.request_count ?? 'N/A'}${a.project ? ` (${a.project})` : ''}`)
+      }
+    } else {
+      lines.push('No recent activity.')
+    }
+    lines.push('')
+  }
+
+  return lines.join('\n')
+}
+
+// get_context — unified context tool. Absorbs get_project_context, summarize_project,
+// get_agent_dashboard, get_agent_context.
 server.tool(
   'get_context',
-  'Call at the START of any significant session. Returns team knowledge grouped by type (architecture, decisions, patterns, bugs, discoveries) plus team conventions, which carry higher authority than memories. Canonical bootstrap — do not skip it.',
+  'Call at the START of any significant session. Returns team conventions (highest authority) plus memories, optionally org stats and recent agent activity. mode "full" (default) is complete detail grouped by type; "compact" is titles/one-liners with ids.',
   {
     project:              z.string().optional().describe('Project to fetch context for; omit for all projects'),
-    limit:                z.number().int().min(1).max(100).optional().describe('Max memories (default: 40)'),
+    mode:                 z.enum(['compact', 'full']).optional().describe('"full" (default) or "compact" (titles/one-liners with ids)'),
     include_conventions:  z.boolean().optional().describe('Include team conventions (default: true)'),
     include_memories:     z.boolean().optional().describe('Include memories (default: true)'),
+    include_stats:        z.boolean().optional().describe('Include org stats (default: false)'),
+    include_activity:     z.boolean().optional().describe('Include recent agent activity (default: false)'),
+    limit:                z.number().int().min(1).max(100).optional().describe('Max memories (default: 40)'),
   },
-  async ({ project, limit, include_conventions, include_memories }) => {
+  async (input) => {
     try {
-      const wantConventions = include_conventions !== false
-      const wantMemories    = include_memories    !== false
-
-      const [memories, conventions] = await Promise.all([
-        wantMemories    ? listMemories({ project, limit: limit ?? 40 }) : Promise.resolve([]),
-        wantConventions ? listConventions(undefined, undefined, project) : Promise.resolve([]),
-      ])
-
-      if (memories.length === 0 && conventions.length === 0) {
-        return { content: [{ type: 'text', text: 'No team context found.' }] }
-      }
-
-      const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-      const projectLabel = project ? ` — ${project}` : ''
-
-      const lines: string[] = [
-        `## NexusMind Team Context${projectLabel}`,
-        `> Last updated: ${date} · ${memories.length} memories · ${conventions.length} conventions`,
-        '',
-      ]
-
-      // Conventions first — they have the highest authority
-      if (wantConventions && conventions.length > 0) {
-        lines.push('=== TEAM CONVENTIONS (FOLLOW THESE FIRST) ===')
-        lines.push('')
-        for (const c of conventions) {
-          const title = c.title ?? `Convention ${c.id}`
-          const cat   = c.category ? ` [${c.category}]` : ''
-          lines.push(`### ${title}${cat}`)
-          lines.push(c.content)
-          lines.push('')
-        }
-        lines.push('')
-      }
-
-      if (wantMemories && memories.length > 0) {
-        // Group by type
-        const groups: Record<string, typeof memories> = {}
-        for (const m of memories) {
-          const key = m.type ?? 'general'
-          groups[key] = groups[key] ?? []
-          groups[key].push(m)
-        }
-
-        const TYPE_LABELS: Record<string, string> = {
-          architecture:    'Architecture & Design',
-          decision:        'Decisions',
-          convention:      'Conventions',
-          pattern:         'Patterns',
-          bugfix:          'Bugs & Fixes',
-          discovery:       'Discoveries',
-          config:          'Configuration',
-          preference:      'Preferences',
-          feature:         'Features',
-          refactoring:     'Refactoring',
-          session_summary: 'Session Summaries',
-          general:         'General',
-        }
-
-        const PRIORITY_ORDER = [
-          'architecture', 'decision', 'convention', 'pattern',
-          'bugfix', 'discovery', 'config', 'feature', 'preference',
-          'refactoring', 'session_summary', 'general',
-        ]
-
-        const sortedKeys = [
-          ...PRIORITY_ORDER.filter(k => groups[k]),
-          ...Object.keys(groups).filter(k => !PRIORITY_ORDER.includes(k)),
-        ]
-
-        lines.push('=== MEMORIES ===')
-        lines.push('')
-
-        for (const key of sortedKeys) {
-          const label = TYPE_LABELS[key] ?? key
-          lines.push(`#### ${label}`)
-          for (const m of groups[key]) {
-            const entry = m.title ?? m.content.split('\n')[0].slice(0, 120)
-            lines.push(`- ${entry}`)
-          }
-          lines.push('')
-        }
-      }
-
-      return { content: [{ type: 'text', text: lines.join('\n') }] }
+      const text = await buildContext(input)
+      return { content: [{ type: 'text', text }] }
     } catch (err) {
       return {
         content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
@@ -1188,57 +1263,6 @@ server.tool(
         type: 'text',
         text: `Imported ${successCount}/${conventions.length} conventions:\n${results.join('\n')}`,
       }],
-    }
-  }
-)
-
-// get_project_context
-server.tool(
-  'get_project_context',
-  'Get the full context for a project: conventions (team rules with highest priority), recent memories, project settings, and agent activity. Call this at the start of any session to ground yourself in the project\'s rules and history.',
-  {
-    project: z.string().describe('Project name to fetch context for (e.g. "nexusmind", "payments-api")'),
-  },
-  async ({ project }) => {
-    try {
-      const ctx = await getProjectContext(project)
-      const sections: string[] = [`## Project Context — ${project}`]
-
-      const memories: Memory[] = Array.isArray(ctx?.memories) ? ctx.memories : []
-      const conventions: Convention[] = Array.isArray(ctx?.conventions) ? ctx.conventions : []
-
-      if (conventions.length > 0) {
-        sections.push(`\n### Conventions (${conventions.length})\n${conventions.map(c => formatConvention(c, { multiline: true })).join('\n')}`)
-      }
-      if (memories.length > 0) {
-        sections.push(`\n### Memories (${memories.length})\n${formatList(memories)}`)
-      }
-
-      // Any remaining top-level fields (settings, agent activity, etc.) — drop null/internal ones.
-      const INTERNAL_KEYS = new Set(['memories', 'conventions', 'id', 'user_id', 'org_id'])
-      const extraEntries = Object.entries(ctx ?? {}).filter(([k, v]) =>
-        !INTERNAL_KEYS.has(k) && v !== null && v !== undefined
-      )
-      if (extraEntries.length > 0) {
-        const extraLines = extraEntries.map(([k, v]) => {
-          const value = typeof v === 'object' ? JSON.stringify(v) : String(v)
-          return `- ${k}: ${value}`
-        })
-        sections.push(`\n### Other\n${extraLines.join('\n')}`)
-      }
-
-      if (conventions.length === 0 && memories.length === 0 && extraEntries.length === 0) {
-        sections.push('\nNo project context found.')
-      }
-
-      return {
-        content: [{ type: 'text', text: sections.join('\n') }],
-      }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
     }
   }
 )
@@ -2932,118 +2956,13 @@ server.tool(
   }
 )
 
-// summarize_project
-server.tool(
-  'summarize_project',
-  'Generate a comprehensive project brief combining conventions, recent memories, and stats. Use at the start of a work session to orient yourself.',
-  {
-    project:              z.string().describe('Project name to summarize (e.g. "nexusmind", "payments-api")'),
-    include_conventions:  z.boolean().optional().describe('Include team conventions in the summary (default: true)'),
-    include_stats:        z.boolean().optional().describe('Include organization stats in the summary (default: false)'),
-  },
-  async ({ project, include_conventions, include_stats }) => {
-    try {
-      const [context, stats] = await Promise.all([
-        getProjectContext(project),
-        include_stats ? getStats() : null,
-      ])
-
-      const sections: string[] = []
-
-      sections.push(`# Project: ${project}`)
-      sections.push(`Generated: ${new Date().toISOString()}`)
-
-      if (include_conventions !== false && context.conventions?.length) {
-        sections.push(`\n## Conventions (${context.conventions.length})`)
-        context.conventions.forEach((c: any) => {
-          sections.push(`### [${c.weight}] ${c.title} (${c.category})`)
-          sections.push(c.content)
-        })
-      }
-
-      if (context.memories?.length) {
-        sections.push(`\n## Recent Memories (${context.memories.length})`)
-        context.memories.slice(0, 20).forEach((m: any) => {
-          sections.push(`- [${m.tags?.join(', ') || 'no tags'}] ${m.content.slice(0, 150)}`)
-        })
-      }
-
-      if (stats) {
-        sections.push(`\n## Stats`)
-        sections.push(JSON.stringify(stats, null, 2))
-      }
-
-      return {
-        content: [{ type: 'text', text: sections.join('\n') }],
-      }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
-    }
-  }
-)
-
 // ── Agent Orientation Tools ───────────────────────────────────────────────────
 
-// Helper: builds the dashboard text (shared between get_agent_dashboard and onboard_agent)
-async function buildAgentDashboard(): Promise<string> {
-  const [stats, agentActivity, conventions] = await Promise.all([
-    getStats(),
-    getAgentActivity(),
-    listConventions(),
-  ])
-
-  const activeConventions = (conventions || [])
-    .filter((c: any) => !c.archived_at)
-    .sort((a: any, b: any) => (b.weight ?? 0) - (a.weight ?? 0))
-    .slice(0, 5)
-
-  const lines = [
-    '# Agent Dashboard',
-    `Generated: ${new Date().toISOString()}`,
-    '',
-    '## Org Stats',
-    `- Total memories: ${stats?.total_memories ?? 'N/A'}`,
-    `- Active projects: ${(stats as any)?.active_projects ?? 'N/A'}`,
-    `- Active users: ${(stats as any)?.active_users ?? 'N/A'}`,
-    '',
-    '## Top Active Agents',
-    ...(agentActivity?.slice(0, 5) ?? []).map((a: any) =>
-      `- ${a.name || a.key_prefix || a.agent || '(unknown)'}: ${a.request_count ?? a.action ?? 'N/A'}`
-    ),
-    '',
-    '## Top Conventions (follow these)',
-    ...activeConventions.map((c: any) =>
-      `- [${c.category ?? 'general'}/${c.weight ?? 0}] **${c.title ?? `Convention ${c.id}`}**: ${c.content.slice(0, 120)}…`
-    ),
-  ]
-  return lines.join('\n')
-}
-
-// get_agent_dashboard
-server.tool(
-  'get_agent_dashboard',
-  'Get a comprehensive orientation summary for an AI agent: org stats, top active agents, recent memories, and active conventions. Call this at the start of a session to orient yourself.',
-  {},
-  async () => {
-    try {
-      const text = await buildAgentDashboard()
-      return { content: [{ type: 'text', text }] }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
-    }
-  }
-)
-
-// onboard_agent
+// onboard_agent — delegates to buildContext (the same builder get_context uses) for the
+// conventions/memories/stats portion, then layers on its write side-effect and org/project info.
 server.tool(
   'onboard_agent',
-  'Complete onboarding for a new AI agent: saves an agent memory, fetches conventions, projects, stats, and org settings in parallel, and returns a comprehensive orientation brief.',
+  'Complete onboarding for a new AI agent: saves an agent memory, then returns get_context plus projects and org settings.',
   {
     agent_name: z.string().describe('Name of the agent being onboarded (e.g. "cursor", "claude-code", "my-custom-agent")'),
     project:    z.string().optional().describe('Optional project the agent will work on'),
@@ -3059,25 +2978,12 @@ server.tool(
         project,
       })
 
-      // 2. Fetch everything in parallel
-      const [conventions, memories, projects, stats, org] = await Promise.all([
-        listConventions(undefined, undefined, project).catch(() => []),
-        searchMemories({ query: '', limit: 10 }).catch(() => []),
+      // 2. Fetch context (conventions + memories + stats) plus onboarding-only extras in parallel
+      const [contextText, projects, org] = await Promise.all([
+        buildContext({ project, mode: 'full', include_stats: true }).catch(() => 'No team context found.'),
         listProjects({}).catch(() => []),
-        getStats().catch(() => ({})),
         getOrgSettings().catch(() => ({})),
       ])
-
-      // 3. Build comprehensive onboarding response
-      const conventionLines = (conventions ?? [])
-        .filter((c: any) => !c.archived_at)
-        .sort((a: any, b: any) => (b.weight ?? 100) - (a.weight ?? 100))
-        .slice(0, 20)
-        .map((c: any) => `- [${c.category ?? 'general'}] **${c.title ?? `Convention ${c.id}`}**: ${c.content?.slice(0, 200)}`)
-
-      const memoryLines = (memories ?? [])
-        .slice(0, 5)
-        .map((m: any) => `- ${m.content?.slice(0, 150)} (tags: ${m.tags?.join(', ') || 'none'})`)
 
       const projectLines = (projects ?? [])
         .filter((p: any) => !p.is_archived)
@@ -3091,20 +2997,10 @@ server.tool(
         `## Organization: ${(org as any)?.name ?? 'Unknown'}`,
         (org as any)?.announcement ? `\n> **Announcement**: ${(org as any).announcement}\n` : '',
         '',
-        `## Stats`,
-        `- Total memories: ${(stats as any)?.total_memories ?? '?'}`,
-        `- Active users: ${(stats as any)?.active_users ?? (stats as any)?.total_users ?? '?'}`,
-        `- Projects: ${projectLines.length}`,
-        `- Conventions: ${conventionLines.length}`,
-        '',
-        '## Team Conventions (follow these — ordered by weight)',
-        conventionLines.length ? conventionLines.join('\n') : '- No conventions set yet',
+        contextText,
         '',
         '## Projects',
         projectLines.length ? projectLines.join('\n') : '- No projects yet',
-        '',
-        '## Recent Memories (sample)',
-        memoryLines.length ? memoryLines.join('\n') : '- No memories yet',
         '',
         '## Quick Start',
         '- Use `store_memory` to save important decisions and discoveries',
@@ -3653,52 +3549,6 @@ server.tool(
         ].join('\n'),
       }],
     }
-  }
-)
-
-// get_agent_context
-server.tool(
-  'get_agent_context',
-  'Get all the context an agent needs to start working: org stats, recent memories, and active conventions. Faster alternative to calling each tool separately.',
-  {},
-  async () => {
-    const [stats, conventions, recentMemories] = await Promise.all([
-      getStats().catch(() => null),
-      listConventions().catch(() => [] as Awaited<ReturnType<typeof listConventions>>),
-      listMemories({ limit: 5 }).catch(() => [] as Awaited<ReturnType<typeof listMemories>>),
-    ])
-
-    const sections: string[] = [
-      '## Org Stats',
-      stats
-        ? `- Total memories: ${stats.total_memories ?? 'N/A'}\n- Total users: ${stats.total_users ?? 'N/A'}\n- Total projects: ${stats.total_code_projects ?? 'N/A'}`
-        : 'Stats unavailable',
-      '',
-      '## Top Conventions (most important rules)',
-    ]
-
-    if (Array.isArray(conventions) && conventions.length > 0) {
-      for (const c of conventions.slice(0, 5)) {
-        sections.push(`### ${c.title ?? `Convention ${c.id}`}`)
-        sections.push(c.content ?? '')
-        sections.push('')
-      }
-    } else {
-      sections.push('No conventions found.')
-    }
-
-    sections.push('')
-    sections.push('## Recent Memories')
-
-    if (Array.isArray(recentMemories) && recentMemories.length > 0) {
-      for (const m of recentMemories.slice(0, 5)) {
-        sections.push(`- [${m.id?.slice(0, 8)}] ${(m.title ?? m.content)?.slice(0, 100)}`)
-      }
-    } else {
-      sections.push('No recent memories found.')
-    }
-
-    return { content: [{ type: 'text', text: sections.join('\n') }] }
   }
 )
 

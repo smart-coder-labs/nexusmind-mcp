@@ -539,12 +539,6 @@ export function deleteConvention(id: string | number): Promise<void> {
   return request<void>(`/v1/conventions/${encodeURIComponent(String(id))}`, { method: 'DELETE' })
 }
 
-// ── Project Context ───────────────────────────────────────────────────────────
-
-export function getProjectContext(project: string): Promise<any> {
-  return request<any>(`/v1/context/project/${encodeURIComponent(project)}`)
-}
-
 // ── Policy Check ──────────────────────────────────────────────────────────────
 
 export function checkPolicy(action: string, resource: string, context?: Record<string, any>): Promise<any> {
