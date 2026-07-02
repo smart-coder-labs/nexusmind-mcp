@@ -417,34 +417,6 @@ server.tool(
   }
 )
 
-// get_conventions_summary
-server.tool(
-  'get_conventions_summary',
-  'Get a compact summary of all active conventions, optionally filtered by category. Use before any coding task to ensure compliance.',
-  {
-    category: z.string().optional().describe('Filter by category (e.g. "naming", "architecture", "testing")'),
-    project: z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
-  },
-  async ({ category, project }) => {
-    try {
-      const conventions = await listConventions(category, undefined, project)
-      if (conventions.length === 0) {
-        const filter = category ? ` for category "${category}"` : ''
-        return { content: [{ type: 'text', text: `No conventions found${filter}.` }] }
-      }
-      const lines = conventions.map(c => formatConvention(c, { showWeight: true, contentChars: 200 }))
-      return {
-        content: [{ type: 'text', text: lines.join('\n') }],
-      }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
-    }
-  }
-)
-
 // get_memory — full untruncated content by id
 server.tool(
   'get_memory',
@@ -1045,25 +1017,37 @@ server.tool(
 
 // ── Conventions ──────────────────────────────────────────────────────────────
 
-// list_conventions
+// list_conventions — unified list/search. Absorbs search_conventions and get_conventions_summary.
 server.tool(
   'list_conventions',
-  'List team conventions stored in NexusMind, optionally filtered by category. Use to discover established patterns, coding standards, or naming rules before starting work.',
+  'List or search team conventions, optionally filtered by category and/or query text. Use to discover established patterns, coding standards, or naming rules before starting work.',
   {
-    category: z.string().optional().describe('Filter by category (e.g. "naming", "architecture", "testing")'),
+    category:         z.string().optional().describe('Filter by category (e.g. "naming", "architecture", "testing")'),
+    query:            z.string().optional().describe('Filter by text in title or content'),
     include_archived: z.boolean().optional().describe('Include archived conventions in results (default: false)'),
-    project: z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
+    project:          z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
+    compact:          z.boolean().optional().describe('Compact shape: weight + title + 200-char snippet (default: false)'),
   },
-  async ({ category, include_archived, project }) => {
+  async ({ category, query, include_archived, project, compact }) => {
     try {
-      const conventions = await listConventions(category, include_archived, project)
-      if (conventions.length === 0) {
-        const filter = category ? ` for category "${category}"` : ''
-        return { content: [{ type: 'text', text: `No conventions found${filter}.` }] }
+      let conventions = await listConventions(category, include_archived, project)
+      if (query) {
+        const q = query.toLowerCase()
+        conventions = conventions.filter(c =>
+          (c.title ?? '').toLowerCase().includes(q) || c.content.toLowerCase().includes(q)
+        )
       }
-      const lines = conventions.map((c, i) => formatConvention(c, { index: i + 1, multiline: true }))
+      if (conventions.length === 0) {
+        const parts: string[] = []
+        if (query) parts.push(`matching "${query}"`)
+        if (category) parts.push(`in category "${category}"`)
+        return { content: [{ type: 'text', text: `No conventions found${parts.length ? ' ' + parts.join(' ') : ''}.` }] }
+      }
+      const lines = compact
+        ? conventions.map(c => formatConvention(c, { showWeight: true, contentChars: 200 }))
+        : conventions.map((c, i) => formatConvention(c, { index: i + 1, multiline: true }))
       return {
-        content: [{ type: 'text', text: `${conventions.length} convention(s):\n\n${lines.join('\n\n')}` }],
+        content: [{ type: 'text', text: `${conventions.length} convention(s):\n\n${lines.join(compact ? '\n' : '\n\n')}` }],
       }
     } catch (err) {
       return {
@@ -2418,47 +2402,6 @@ server.tool(
       const session = await updateSession(id, { summary, description })
       return {
         content: [{ type: 'text', text: `Session updated (id: ${session.id})` }],
-      }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
-    }
-  }
-)
-
-// search_conventions
-server.tool(
-  'search_conventions',
-  'Search team conventions by content or title, optionally filtered by category. Returns conventions ordered by weight (highest authority first). Use this to find relevant rules before performing any action.',
-  {
-    query:            z.string().optional().describe('Text to search in convention titles and content'),
-    category:         z.string().optional().describe('Filter by category (e.g. "naming", "architecture", "testing")'),
-    include_archived: z.boolean().optional().describe('Include archived conventions in results (default: false)'),
-    project:          z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
-  },
-  async ({ query, category, include_archived, project }) => {
-    try {
-      const conventions = await listConventions(category, include_archived, project)
-      const filtered = query
-        ? conventions.filter(c => {
-            const q = query.toLowerCase()
-            return (
-              (c.title ?? '').toLowerCase().includes(q) ||
-              c.content.toLowerCase().includes(q)
-            )
-          })
-        : conventions
-      if (filtered.length === 0) {
-        const parts: string[] = []
-        if (query) parts.push(`matching "${query}"`)
-        if (category) parts.push(`in category "${category}"`)
-        return { content: [{ type: 'text', text: `No conventions found${parts.length ? ' ' + parts.join(' ') : ''}.` }] }
-      }
-      const lines = filtered.map((c, i) => formatConvention(c, { index: i + 1, multiline: true }))
-      return {
-        content: [{ type: 'text', text: `${filtered.length} convention(s):\n\n${lines.join('\n\n')}` }],
       }
     } catch (err) {
       return {
