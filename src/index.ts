@@ -19,12 +19,17 @@ import type { Memory, CodeSearchResult, CodeChunk, Session } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+const TITLE_FALLBACK_MAX = 150
+
 function formatMemory(m: Memory): string {
   const date = new Date(m.created_at).toLocaleDateString()
   const type = m.type ? `${m.type} ` : ''
   const tags = m.tags.length > 0 ? ` [${m.tags.join(', ')}]` : ''
   const rev  = m.revision_count > 1 ? ` (rev ${m.revision_count})` : ''
-  return `• [${type}${m.tool}] ${m.project || '(no project)'} — ${m.title ?? m.content}${tags}${rev} (${date})`
+  const label = m.title ?? (m.content.length > TITLE_FALLBACK_MAX
+    ? `${m.content.slice(0, TITLE_FALLBACK_MAX)}…`
+    : m.content)
+  return `• [${m.id}] [${type}${m.tool}] ${m.project || '(no project)'} — ${label}${tags}${rev} (${date})`
 }
 
 function formatList(memories: Memory[]): string {
