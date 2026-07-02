@@ -1226,8 +1226,37 @@ server.tool(
   async ({ project }) => {
     try {
       const ctx = await getProjectContext(project)
+      const sections: string[] = [`## Project Context — ${project}`]
+
+      const memories: Memory[] = Array.isArray(ctx?.memories) ? ctx.memories : []
+      const conventions: Convention[] = Array.isArray(ctx?.conventions) ? ctx.conventions : []
+
+      if (conventions.length > 0) {
+        sections.push(`\n### Conventions (${conventions.length})\n${conventions.map(c => formatConvention(c, { multiline: true })).join('\n')}`)
+      }
+      if (memories.length > 0) {
+        sections.push(`\n### Memories (${memories.length})\n${formatList(memories)}`)
+      }
+
+      // Any remaining top-level fields (settings, agent activity, etc.) — drop null/internal ones.
+      const INTERNAL_KEYS = new Set(['memories', 'conventions', 'id', 'user_id', 'org_id'])
+      const extraEntries = Object.entries(ctx ?? {}).filter(([k, v]) =>
+        !INTERNAL_KEYS.has(k) && v !== null && v !== undefined
+      )
+      if (extraEntries.length > 0) {
+        const extraLines = extraEntries.map(([k, v]) => {
+          const value = typeof v === 'object' ? JSON.stringify(v) : String(v)
+          return `- ${k}: ${value}`
+        })
+        sections.push(`\n### Other\n${extraLines.join('\n')}`)
+      }
+
+      if (conventions.length === 0 && memories.length === 0 && extraEntries.length === 0) {
+        sections.push('\nNo project context found.')
+      }
+
       return {
-        content: [{ type: 'text', text: JSON.stringify(ctx, null, 2) }],
+        content: [{ type: 'text', text: sections.join('\n') }],
       }
     } catch (err) {
       return {
