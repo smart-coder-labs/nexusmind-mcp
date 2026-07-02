@@ -12,6 +12,7 @@ import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as readline from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
+import { spawnSync } from 'node:child_process'
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -20,10 +21,19 @@ const CLAUDE_JSON_PATH      = join(HOME, '.claude.json')
 const CLAUDE_SETTINGS       = join(HOME, '.claude', 'settings.json')
 const INSTALLED_PLUGINS_JSON = join(HOME, '.claude', 'plugins', 'installed_plugins.json')
 const CURSOR_GLOBAL         = join(HOME, '.cursor', 'mcp.json')
+// This file is dist/setup.js when built/published — hooks live alongside it at
+// dist/hooks/*.js, so THIS_DIR is already the right base for hook script paths.
+const THIS_DIR              = dirname(fileURLToPath(import.meta.url))
 
 const GITHUB_REPO       = 'smart-coder-labs/nexusmind-claude-plugin'
 const MARKETPLACE_NAME  = 'nexusmind'
 const PLUGIN_KEY        = `${MARKETPLACE_NAME}@${MARKETPLACE_NAME}`
+
+// Codex CLI — home directory is overridable via CODEX_HOME (read at call time,
+// not cached, so tests can point it at a temp dir).
+function codexHomeDir(): string {
+  return process.env.CODEX_HOME || join(HOME, '.codex')
+}
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 
@@ -175,6 +185,119 @@ function installCursor(apiKey: string, baseUrl: string, scope: 'global' | 'proje
   writeShellEnv(apiKey, baseUrl)
 }
 
+// ── Codex CLI ─────────────────────────────────────────────────────────────────
+
+function isCodexCliAvailable(): boolean {
+  try {
+    const res = spawnSync('codex', ['--version'], { stdio: 'ignore', shell: process.platform === 'win32' })
+    return !res.error && res.status === 0
+  } catch {
+    return false
+  }
+}
+
+function registerCodexMcp(apiKey: string, baseUrl: string): boolean {
+  const args = [
+    'mcp', 'add', 'nexusmind',
+    '--env', `NEXUSMIND_API_KEY=${apiKey}`,
+    '--env', `NEXUSMIND_BASE_URL=${baseUrl}`,
+    '--',
+    'npx', '-y', '@smart-coder-labs/nexusmind-mcp@latest',
+  ]
+  try {
+    const res = spawnSync('codex', args, { stdio: 'inherit', shell: process.platform === 'win32' })
+    return !res.error && res.status === 0
+  } catch {
+    return false
+  }
+}
+
+function printCodexTomlSnippet(apiKey: string, baseUrl: string) {
+  const configPath = join(codexHomeDir(), 'config.toml')
+  log(`  Add this to ${c.cyan}${configPath}${c.reset} (do not hand-edit any other way):`)
+  log('')
+  log(`    ${c.dim}[mcp_servers.nexusmind]${c.reset}`)
+  log(`    ${c.dim}command = "npx"${c.reset}`)
+  log(`    ${c.dim}args = ["-y", "@smart-coder-labs/nexusmind-mcp@latest"]${c.reset}`)
+  log(`    ${c.dim}[mcp_servers.nexusmind.env]${c.reset}`)
+  log(`    ${c.dim}NEXUSMIND_API_KEY = "${apiKey}"${c.reset}`)
+  log(`    ${c.dim}NEXUSMIND_BASE_URL = "${baseUrl}"${c.reset}`)
+}
+
+interface CodexHookDef {
+  type: 'command'
+  command: string
+  command_windows: string
+  timeout: number
+}
+
+// Absolute node path avoids Windows .cmd shim issues; absolute dist path means
+// the hook works regardless of Codex's cwd.
+function hookCommand(scriptFile: string): CodexHookDef {
+  const nodeBin     = process.execPath
+  const scriptPath  = join(THIS_DIR, 'hooks', scriptFile)
+  const commandLine = `"${nodeBin}" "${scriptPath}"`
+  return {
+    type: 'command',
+    command: commandLine,
+    command_windows: commandLine,
+    timeout: 15,
+  }
+}
+
+// Merges one hook entry into an existing event array — replaces any prior
+// NexusMind entry for the same script (idempotent re-run) without touching
+// entries other tools registered for the same event.
+function mergeHookEntry(existing: unknown, entry: CodexHookDef, marker: string): CodexHookDef[] {
+  const arr = Array.isArray(existing) ? (existing as CodexHookDef[]) : []
+  const filtered = arr.filter(h => !(typeof h?.command === 'string' && h.command.includes(marker)))
+  filtered.push(entry)
+  return filtered
+}
+
+export function installCodexHooks() {
+  const hooksPath = join(codexHomeDir(), 'hooks.json')
+  const data = readJson(hooksPath) as Record<string, unknown>
+
+  const mapping: Array<[string, string]> = [
+    ['SessionStart', 'session-start.js'],
+    ['UserPromptSubmit', 'user-prompt-submit.js'],
+    ['PostCompact', 'post-compact.js'],
+    ['Stop', 'stop.js'],
+    ['SubagentStop', 'stop.js'],
+  ]
+
+  for (const [event, file] of mapping) {
+    data[event] = mergeHookEntry(data[event], hookCommand(file), file)
+  }
+
+  writeJson(hooksPath, data)
+  success(`Hooks → ${hooksPath}`)
+}
+
+export function installCodex(apiKey: string, baseUrl: string) {
+  writeShellEnv(apiKey, baseUrl)
+
+  if (isCodexCliAvailable()) {
+    info('Registering MCP server via codex mcp add…')
+    if (registerCodexMcp(apiKey, baseUrl)) {
+      success('MCP server registered with Codex CLI')
+    } else {
+      warn('codex mcp add failed — add this manually instead:')
+      printCodexTomlSnippet(apiKey, baseUrl)
+    }
+  } else {
+    warn('codex CLI not found on PATH — add this manually:')
+    printCodexTomlSnippet(apiKey, baseUrl)
+  }
+
+  installCodexHooks()
+
+  log('')
+  warn('Hooks are NOT auto-trusted by Codex. Inside Codex, run /hooks and approve the NexusMind hooks before they take effect.')
+  info('Codex\'s native "Memories" feature (off by default) coexists with these hooks — enabling both is safe but may duplicate context. See README.')
+}
+
 // ── Prompt helpers ────────────────────────────────────────────────────────────
 
 async function choose(rl: readline.Interface, prompt: string, options: string[]): Promise<number> {
@@ -225,12 +348,14 @@ export async function main() {
   log(`${c.bold}Configure for:${c.reset}`)
   log('  1) Claude Code')
   log('  2) Cursor')
-  log('  3) Both (recommended)')
+  log('  3) Codex CLI')
+  log('  4) All (recommended)')
 
-  const toolChoice = await choose(rl, '\nChoice [1-3]: ', ['1', '2', '3'])
+  const toolChoice = await choose(rl, '\nChoice [1-4]: ', ['1', '2', '3', '4'])
 
-  const doClaude = toolChoice === 1 || toolChoice === 3
-  const doCursor = toolChoice === 2 || toolChoice === 3
+  const doClaude = toolChoice === 1 || toolChoice === 4
+  const doCursor = toolChoice === 2 || toolChoice === 4
+  const doCodex  = toolChoice === 3 || toolChoice === 4
 
   // Cursor scope (only if Cursor selected)
   let cursorScope: 'global' | 'project' = 'global'
@@ -260,6 +385,12 @@ export async function main() {
     log('')
   }
 
+  if (doCodex) {
+    log(`${c.bold}Setting up Codex CLI…${c.reset}`)
+    installCodex(apiKey, baseUrl)
+    log('')
+  }
+
   // Done
   log(`${c.bold}${c.green}All done!${c.reset}\n`)
 
@@ -280,6 +411,13 @@ export async function main() {
     } else {
       log('  • Active only in this project — open the folder in Cursor')
     }
+    log('')
+  }
+  if (doCodex) {
+    log(`${c.bold}Codex CLI${c.reset}`)
+    log('  • Run: source ~/.zshrc  (or open a new terminal)')
+    log('  • Inside Codex, run /hooks and approve the NexusMind hooks (SessionStart, UserPromptSubmit, PostCompact, Stop, SubagentStop)')
+    log('  • Tools available: store_memory, search_memories, get_context')
     log('')
   }
 }
