@@ -24,9 +24,10 @@ Backend URL [http://localhost:8080]: https://your-nexusmind.com
 Configure for:
   1) Claude Code
   2) Cursor
-  3) Both (recommended)
+  3) Codex CLI
+  4) All (recommended)
 
-Choice [1-3]: 3
+Choice [1-4]: 4
 
 Cursor — where to write the config?
   1) Global (all projects)  →  ~/.cursor/mcp.json
@@ -97,6 +98,57 @@ Add to `~/.cursor/mcp.json`:
 
 Create `.cursor/mcp.json` in your project root with the same content.
 Add `.cursor/mcp.json` to `.gitignore` if the file contains your API key.
+
+### Codex CLI
+
+The setup wizard prefers the official registration command:
+
+```bash
+codex mcp add nexusmind --env NEXUSMIND_API_KEY=nm_your_key_here --env NEXUSMIND_BASE_URL=https://your-nexusmind.com -- npx -y @smart-coder-labs/nexusmind-mcp@latest
+```
+
+If the `codex` binary isn't on your `PATH`, the wizard prints a `[mcp_servers.nexusmind]`
+snippet to paste into `~/.codex/config.toml` yourself (setup never hand-edits
+`config.toml` — TOML edits are your call). `CODEX_HOME` is respected if you've set it.
+
+**Hooks.** Setup also writes memory-protocol hooks to `~/.codex/hooks.json`
+(merged in, not overwritten — existing hooks from other tools are left alone):
+
+| Codex event | Handler |
+|---|---|
+| `SessionStart` | `dist/hooks/session-start.js` — protocol reminder + project/recent memories |
+| `UserPromptSubmit` | `dist/hooks/user-prompt-submit.js` — recall-keyword-gated by default |
+| `PostCompact` | `dist/hooks/post-compact.js` — recovery instructions + recent memories |
+| `Stop`, `SubagentStop` | `dist/hooks/stop.js` — passive capture of decision-like output |
+
+**Codex does not auto-trust hooks.** After setup, open Codex and run `/hooks` to
+review and approve the NexusMind entries — they will not fire until you do.
+
+**Coexistence with Codex Memories.** Codex ships a native "Memories" feature
+(off by default). It's unrelated to NexusMind and safe to use alongside these
+hooks — just be aware that running both means memory-style context may show up
+twice (once from Codex Memories, once from NexusMind) if you enable Codex's
+native feature too.
+
+**Env vars** (same ones the hooks read):
+
+| Var | Default | Purpose |
+|---|---|---|
+| `NEXUSMIND_API_KEY` | — | required; hooks no-op silently without it |
+| `NEXUSMIND_BASE_URL` | `https://nexusmind-backend.fly.dev` | backend URL |
+| `NEXUSMIND_PROMPT_INJECT` | `minimal` | `off` \| `minimal` \| `full` — controls `UserPromptSubmit` verbosity |
+| `NEXUSMIND_PROMPT_MEMORY_LIMIT` | `3` | memories shown per prompt in `full` mode |
+| `NEXUSMIND_SESSION_PROJECT_LIMIT` | `8` | project memories shown on `SessionStart` |
+| `NEXUSMIND_SESSION_RECENT_LIMIT` | `5` | recent memories shown on `SessionStart`/`PostCompact` |
+
+**Uninstall:**
+
+```bash
+codex mcp remove nexusmind
+```
+
+Then remove the NexusMind entries from `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`) —
+delete the file, or manually remove array entries whose `command` contains `dist/hooks/`.
 
 ---
 

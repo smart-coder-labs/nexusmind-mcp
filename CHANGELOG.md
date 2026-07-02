@@ -6,6 +6,18 @@ Breaking: tool count reduced from 116 to 103 by consolidating overlapping read/w
 tools into single, parameterized tools. All removed tools have a direct replacement
 below — no functionality was dropped, only merged.
 
+### Added
+
+- Codex CLI support. `npx @smart-coder-labs/nexusmind-mcp setup` now offers Codex as
+  a configure-for target: it runs `codex mcp add` when the `codex` binary is on
+  `PATH` (falling back to a `config.toml` snippet otherwise), and writes
+  memory-protocol hooks to `~/.codex/hooks.json` (`SessionStart`, `UserPromptSubmit`,
+  `PostCompact`, `Stop`, `SubagentStop`) — merged into any existing file, never
+  overwritten. Hook logic lives under `src/hooks/` as plain Node (no shell scripts),
+  so it runs unmodified on macOS, Linux, and Windows. See the README's Codex CLI
+  section for env vars, the `/hooks` trust-approval step, and coexistence notes with
+  Codex's native Memories feature.
+
 ### Setup
 
 - Claude Code registration is now handled exclusively by the NexusMind Claude plugin.
