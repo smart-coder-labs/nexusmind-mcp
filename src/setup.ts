@@ -15,10 +15,11 @@ import { stdin as input, stdout as output } from 'node:process'
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
-const HOME              = homedir()
-const CLAUDE_JSON_PATH  = join(HOME, '.claude.json')
-const CLAUDE_SETTINGS   = join(HOME, '.claude', 'settings.json')
-const CURSOR_GLOBAL     = join(HOME, '.cursor', 'mcp.json')
+const HOME                  = homedir()
+const CLAUDE_JSON_PATH      = join(HOME, '.claude.json')
+const CLAUDE_SETTINGS       = join(HOME, '.claude', 'settings.json')
+const INSTALLED_PLUGINS_JSON = join(HOME, '.claude', 'plugins', 'installed_plugins.json')
+const CURSOR_GLOBAL         = join(HOME, '.cursor', 'mcp.json')
 
 const GITHUB_REPO       = 'smart-coder-labs/nexusmind-claude-plugin'
 const MARKETPLACE_NAME  = 'nexusmind'
@@ -89,6 +90,17 @@ function writeShellEnv(apiKey: string, baseUrl: string) {
 
 // ── Install helpers ───────────────────────────────────────────────────────────
 
+// The Claude plugin is the canonical registration path for Claude Code — it owns
+// the MCP server entry and hooks. Setup no longer writes a user-level MCP server
+// registration (~/.claude.json or ~/.claude/settings.json) for Claude Code; it only
+// detects the plugin and guides the user to install it if missing.
+function isNexusmindPluginInstalled(): boolean {
+  const data = readJson(INSTALLED_PLUGINS_JSON)
+  const plugins = (data.plugins as Record<string, unknown[]>) ?? {}
+  const entry = plugins[PLUGIN_KEY]
+  return Array.isArray(entry) && entry.length > 0
+}
+
 function installClaudeCode(apiKey: string, baseUrl: string) {
   // Clean up stale absolute-path hooks from old installs
   const settings = readJson(CLAUDE_SETTINGS)
@@ -113,26 +125,16 @@ function installClaudeCode(apiKey: string, baseUrl: string) {
     info('Removed stale hooks from previous install')
   }
 
-  // Write MCP entry to ~/.claude.json
-  const claudeJson = readJson(CLAUDE_JSON_PATH)
-  const mcpServers = (claudeJson.mcpServers as Record<string, unknown>) ?? {}
-  mcpServers['nexusmind'] = mcpEntry()
-  claudeJson.mcpServers = mcpServers
-  writeJson(CLAUDE_JSON_PATH, claudeJson)
-  success(`MCP server → ${CLAUDE_JSON_PATH}`)
-
-  // Register plugin (hooks downloaded from GitHub by Claude Code)
-  const s = readJson(CLAUDE_SETTINGS)
-  const enabledPlugins  = (s.enabledPlugins  as Record<string, boolean>) ?? {}
-  const extraMarkets    = (s.extraKnownMarketplaces as Record<string, unknown>) ?? {}
-  enabledPlugins[PLUGIN_KEY] = true
-  extraMarkets[MARKETPLACE_NAME] = { source: { repo: GITHUB_REPO, source: 'github' } }
-  s.enabledPlugins = enabledPlugins
-  s.extraKnownMarketplaces = extraMarkets
-  writeJson(CLAUDE_SETTINGS, s)
-  success(`Plugin registered → github.com/${GITHUB_REPO}`)
-
   writeShellEnv(apiKey, baseUrl)
+
+  if (isNexusmindPluginInstalled()) {
+    success('NexusMind plugin detected — MCP registration is handled by the plugin')
+  } else {
+    warn('NexusMind plugin not installed — it is the canonical way to register NexusMind with Claude Code')
+    log('  Inside Claude Code, run:')
+    log(`    ${c.cyan}/plugin marketplace add ${GITHUB_REPO}${c.reset}`)
+    log(`    ${c.cyan}/plugin install ${PLUGIN_KEY}${c.reset}`)
+  }
 }
 
 function installCursor(apiKey: string, baseUrl: string, scope: 'global' | 'project') {
@@ -241,15 +243,15 @@ export async function main() {
   if (doClaude) {
     log(`${c.bold}Claude Code${c.reset}`)
     log('  • Run: source ~/.zshrc  (or open a new terminal)')
-    log('  • Then restart Claude Code')
-    log('  • Tools available: store_memory, search_memory, list_memories, get_context')
+    log('  • Registration is handled by the NexusMind plugin — install it if you have not (see above)')
+    log('  • Tools available: store_memory, search_memories, get_context')
     log('')
   }
   if (doCursor) {
     log(`${c.bold}Cursor${c.reset}`)
     log('  • Run: source ~/.zshrc  (or open a new terminal)')
     log('  • Then restart Cursor')
-    log('  • Tools available: store_memory, search_memory, list_memories, get_context')
+    log('  • Tools available: store_memory, search_memories, get_context')
     if (cursorScope === 'global') {
       log('  • Active for all projects globally')
     } else {
