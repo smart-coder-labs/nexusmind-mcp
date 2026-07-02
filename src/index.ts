@@ -348,10 +348,11 @@ server.tool(
   'Get a compact summary of all active conventions, optionally filtered by category. Use before any coding task to ensure compliance.',
   {
     category: z.string().optional().describe('Filter by category (e.g. "naming", "architecture", "testing")'),
+    project: z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
   },
-  async ({ category }) => {
+  async ({ category, project }) => {
     try {
-      const conventions = await listConventions(category)
+      const conventions = await listConventions(category, undefined, project)
       if (conventions.length === 0) {
         const filter = category ? ` for category "${category}"` : ''
         return { content: [{ type: 'text', text: `No conventions found${filter}.` }] }
@@ -980,10 +981,11 @@ server.tool(
   {
     category: z.string().optional().describe('Filter by category (e.g. "naming", "architecture", "testing")'),
     include_archived: z.boolean().optional().describe('Include archived conventions in results (default: false)'),
+    project: z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
   },
-  async ({ category, include_archived }) => {
+  async ({ category, include_archived, project }) => {
     try {
-      const conventions = await listConventions(category, include_archived)
+      const conventions = await listConventions(category, include_archived, project)
       if (conventions.length === 0) {
         const filter = category ? ` for category "${category}"` : ''
         return { content: [{ type: 'text', text: `No conventions found${filter}.` }] }
@@ -2385,10 +2387,11 @@ server.tool(
     query:            z.string().optional().describe('Text to search in convention titles and content'),
     category:         z.string().optional().describe('Filter by category (e.g. "naming", "architecture", "testing")'),
     include_archived: z.boolean().optional().describe('Include archived conventions in results (default: false)'),
+    project:          z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
   },
-  async ({ query, category, include_archived }) => {
+  async ({ query, category, include_archived, project }) => {
     try {
-      const conventions = await listConventions(category, include_archived)
+      const conventions = await listConventions(category, include_archived, project)
       const filtered = query
         ? conventions.filter(c => {
             const q = query.toLowerCase()
@@ -2426,11 +2429,12 @@ server.tool(
   'check_convention_compliance',
   'Check whether a proposed action or implementation complies with all active team conventions. Returns COMPLIANT or NON-COMPLIANT with specific violations listed.',
   {
-    action: z.string().describe('A description of what the agent is about to do or implement'),
+    action:  z.string().describe('A description of what the agent is about to do or implement'),
+    project: z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
   },
-  async ({ action }) => {
+  async ({ action, project }) => {
     try {
-      const conventions = await listConventions()
+      const conventions = await listConventions(undefined, undefined, project)
       const active = conventions
         .filter((c: any) => !c.archived_at)
         .sort((a: any, b: any) => b.weight - a.weight)
@@ -2873,10 +2877,11 @@ server.tool(
   {
     category:   z.string().optional().describe('Filter by category (e.g. "naming", "architecture"). Omit to match all categories.'),
     max_weight: z.number().optional().describe('Archive conventions with weight less than or equal to this value. Omit to ignore weight when filtering.'),
+    project:    z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
   },
-  async ({ category, max_weight }) => {
+  async ({ category, max_weight, project }) => {
     try {
-      const conventions = await listConventions(category, false)
+      const conventions = await listConventions(category, false, project)
       const targets = conventions.filter(c => {
         if (max_weight != null) {
           const w = (c as any).weight ?? 0
@@ -2909,10 +2914,11 @@ server.tool(
   {
     category: z.string().describe('Category whose conventions will be updated (e.g. "naming", "architecture")'),
     weight:   z.number().int().describe('New weight to assign to all conventions in the category'),
+    project:  z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
   },
-  async ({ category, weight }) => {
+  async ({ category, weight, project }) => {
     try {
-      const conventions = await listConventions(category, false)
+      const conventions = await listConventions(category, false, project)
       if (conventions.length === 0) {
         return { content: [{ type: 'text', text: `No active conventions found for category "${category}".` }] }
       }
@@ -3403,10 +3409,12 @@ server.tool(
 server.tool(
   'list_policies',
   'List all access policies in the organization. Policies define what actions are allowed or denied on resources.',
-  {},
-  async () => {
+  {
+    project: z.string().optional().describe('Optional project slug to scope results to that project plus global (unscoped) items.'),
+  },
+  async ({ project }) => {
     try {
-      const policies = await listPolicies()
+      const policies = await listPolicies(project)
       if (policies.length === 0) {
         return { content: [{ type: 'text', text: 'No policies found.' }] }
       }
