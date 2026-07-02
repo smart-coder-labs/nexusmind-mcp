@@ -96,9 +96,22 @@ function writeShellEnv(apiKey: string, baseUrl: string) {
 // detects the plugin and guides the user to install it if missing.
 function isNexusmindPluginInstalled(): boolean {
   const data = readJson(INSTALLED_PLUGINS_JSON)
+  if (existsSync(INSTALLED_PLUGINS_JSON) && !('plugins' in data)) {
+    info(`Note: ${INSTALLED_PLUGINS_JSON} exists but has an unexpected shape (no "plugins" key) — treating plugin as not installed.`)
+  }
   const plugins = (data.plugins as Record<string, unknown[]>) ?? {}
   const entry = plugins[PLUGIN_KEY]
   return Array.isArray(entry) && entry.length > 0
+}
+
+// Setup used to write a legacy `mcpServers.nexusmind` entry directly into ~/.claude.json.
+// That file is never touched by the current setup flow, so users who ran an old version
+// keep that entry forever — even after installing the plugin, which registers its own
+// MCP server. Two entries pointing at NexusMind causes duplicate tool registration.
+function hasLegacyClaudeJsonEntry(): boolean {
+  const data = readJson(CLAUDE_JSON_PATH)
+  const mcpServers = (data.mcpServers as Record<string, unknown>) ?? {}
+  return 'nexusmind' in mcpServers
 }
 
 function installClaudeCode(apiKey: string, baseUrl: string) {
@@ -134,6 +147,16 @@ function installClaudeCode(apiKey: string, baseUrl: string) {
     log('  Inside Claude Code, run:')
     log(`    ${c.cyan}/plugin marketplace add ${GITHUB_REPO}${c.reset}`)
     log(`    ${c.cyan}/plugin install ${PLUGIN_KEY}${c.reset}`)
+  }
+
+  if (hasLegacyClaudeJsonEntry()) {
+    warn(`${c.bold}Legacy MCP registration detected in ${CLAUDE_JSON_PATH}${c.reset}`)
+    log('  An older version of this setup wrote a `mcpServers.nexusmind` entry directly')
+    log(`  into ${c.dim}${CLAUDE_JSON_PATH}${c.reset}. That file is no longer managed by setup, so this`)
+    log('  entry is never cleaned up automatically. If the plugin is also installed, NexusMind')
+    log('  ends up registered twice, which can duplicate tools or cause conflicting behavior.')
+    log('  Remove the legacy entry with:')
+    log(`    ${c.cyan}claude mcp remove nexusmind${c.reset}`)
   }
 }
 
