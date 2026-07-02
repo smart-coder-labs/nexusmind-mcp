@@ -52,9 +52,10 @@ Done. Restart Claude Code or Cursor and the tools are available immediately.
 | Tool | Description |
 |------|-------------|
 | `store_memory` | Save a decision, bug fix, convention, or discovery |
-| `search_memory` | Full-text search over team memories |
-| `list_memories` | Browse recent memories, optionally filtered by project or type |
-| `get_context` | Fetch team memories as a formatted block — designed for Cursor rules and notepads |
+| `search_memories` | Search or browse team memories — pass `query` to search, omit it to list/filter |
+| `get_context` | Fetch team knowledge as a formatted block — designed for Cursor rules and notepads |
+
+See [CHANGELOG.md](./CHANGELOG.md) for the full tool list and the 0.5.0 migration table.
 
 ---
 
@@ -62,22 +63,16 @@ Done. Restart Claude Code or Cursor and the tools are available immediately.
 
 ### Claude Code
 
-Add to `~/.claude.json`:
+Claude Code registration is handled by the NexusMind plugin, not by a manual
+`~/.claude.json` entry. Install it from inside Claude Code:
 
-```json
-{
-  "mcpServers": {
-    "nexusmind": {
-      "command": "npx",
-      "args": ["-y", "@smart-coder-labs/nexusmind-mcp"],
-      "env": {
-        "NEXUSMIND_API_KEY": "nm_your_key_here",
-        "NEXUSMIND_BASE_URL": "https://your-nexusmind.com"
-      }
-    }
-  }
-}
 ```
+/plugin marketplace add smart-coder-labs/nexusmind-claude-plugin
+/plugin install nexusmind@nexusmind
+```
+
+Then set `NEXUSMIND_API_KEY` and `NEXUSMIND_BASE_URL` (the setup wizard writes these
+to your shell rc file, or set them yourself).
 
 ### Cursor (global)
 
@@ -151,7 +146,7 @@ NEXUSMIND_API_KEY=nm_your_key NEXUSMIND_BASE_URL=http://localhost:8080 npx @smar
 
 | Issue | Fix |
 |-------|-----|
-| Tools not appearing in Claude Code | Run `npx @smart-coder-labs/nexusmind-mcp setup` and restart |
+| Tools not appearing in Claude Code | Run `npx @smart-coder-labs/nexusmind-mcp setup`; if it reports the plugin isn't installed, run the printed `/plugin marketplace add` / `/plugin install` commands and restart |
 | Tools not appearing in Cursor | Restart Cursor after adding mcp.json. Requires Cursor v0.45+ |
 | `NEXUSMIND_BASE_URL is not set` | Re-run setup or add the env var to your mcp.json manually |
 | `NexusMind backend not reachable` | Check that your NexusMind backend is running |
