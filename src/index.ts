@@ -23,13 +23,13 @@ const TITLE_FALLBACK_MAX = 150
 
 function formatMemory(m: Memory): string {
   const date = new Date(m.created_at).toLocaleDateString()
-  const type = m.type ? `${m.type} ` : ''
+  const type = m.type ? `${m.type}|` : ''
   const tags = m.tags.length > 0 ? ` [${m.tags.join(', ')}]` : ''
   const rev  = m.revision_count > 1 ? ` (rev ${m.revision_count})` : ''
   const label = m.title ?? (m.content.length > TITLE_FALLBACK_MAX
     ? `${m.content.slice(0, TITLE_FALLBACK_MAX)}…`
     : m.content)
-  return `• [${m.id}] [${type}${m.tool}] ${m.project || '(no project)'} — ${label}${tags}${rev} (${date})`
+  return `• [${m.id} | ${type}${m.tool}] ${m.project || '(no project)'} — ${label}${tags}${rev} (${date})`
 }
 
 function formatList(memories: Memory[]): string {
@@ -122,66 +122,88 @@ server.tool(
 // search_memories — unified read tool: semantic search when query is present, plain
 // filtered browse/list when it is absent. Absorbs search_memory, search_memories_advanced,
 // list_memories, get_memory_timeline, get_session_memories.
+//
+// POST /v1/memory/search only accepts {query, limit, mode} server-side — every other
+// filter must be applied client-side when `query` is present. GET /v1/memory (list mode)
+// does support project/tool/type/scope/session_id/collection_id/include_archived as
+// query params, so those are forwarded server-side there; only `tags` and `pinned` stay
+// client-side in list mode since the backend does not filter on them.
 server.tool(
   'search_memories',
-  'Search or browse team memories. Pass query for semantic search; omit it to list/browse with filters (project, type, tags, date range, session).',
+  'Search or browse team memories. Pass query for semantic search (filtered client-side over the top 100 ranked matches — narrow filters may under-return beyond that window); omit it to list/browse with filters (project, type, tags, date range, session).',
   {
     query:            z.string().optional().describe('Semantic search text — omit to list/browse instead'),
     project:          z.string().optional().describe('Filter by project name'),
     type:             typeEnum,
     scope:            z.enum(['project', 'personal']).optional().describe('Filter by scope'),
     session_id:       z.string().optional().describe('Filter by session ID'),
+    collection_id:    z.string().optional().describe('Filter by collection ID'),
+    tool:             z.string().optional().describe('Filter by tool (e.g. "claude-code", "cursor")'),
     since:            z.string().optional().describe('ISO date — only memories on/after this date'),
     until:            z.string().optional().describe('ISO date — only memories on/before this date'),
     tags:             z.array(z.string()).optional().describe('Filter by tags'),
     tag_mode:         z.enum(['any', 'all']).optional().describe('"any" (default) or "all" tags must match'),
     pinned:           z.boolean().optional().describe('When true, return only pinned memories'),
     include_archived: z.boolean().optional().describe('Include archived memories (default: false)'),
-    sort:             z.enum(['created_at']).optional().describe('created_at for timeline ordering'),
-    limit:            z.number().int().min(1).max(100).optional().describe('Max results (default: 20)'),
+    sort:             z.enum(['created_at']).optional().describe('created_at for timeline ordering — applies only when query is omitted'),
+    limit:            z.number().int().min(1).max(200).optional().describe('Max results (default: 20)'),
   },
   async (input) => {
     try {
       const requestedLimit = input.limit ?? 20
       const BACKEND_MAX_LIMIT = 100
+      const isQueryMode = Boolean(input.query)
+
       // Client-side filters run AFTER the backend result set — if we ask the backend for
       // only `requestedLimit` results, filtering can silently under-return even when more
       // matches exist. Fetch the backend max instead whenever a client-side filter is
       // present, then slice to the requested limit ourselves.
-      const listModePinnedFilter = !input.query && input.pinned !== undefined
-      const hasClientSideFilter = Boolean(
-        input.since || input.until || input.tags?.length || listModePinnedFilter
+      //
+      // Query mode: the search endpoint only honors {query, limit, mode} — every filter
+      // below is applied client-side, so every one of them must count toward the trigger.
+      const queryModeClientFilters = Boolean(
+        input.project || input.type || input.scope || input.session_id || input.tool ||
+        input.collection_id || input.tags?.length || input.since || input.until ||
+        input.pinned !== undefined || !input.include_archived
       )
+      // List mode: project/type/scope/session_id/tool/collection_id/include_archived are
+      // forwarded as server-side query params, so only tags/pinned stay client-side here.
+      const listModeClientFilters = Boolean(input.tags?.length || input.pinned !== undefined)
+
+      const hasClientSideFilter = isQueryMode ? queryModeClientFilters : listModeClientFilters
       const fetchLimit = hasClientSideFilter ? BACKEND_MAX_LIMIT : requestedLimit
 
       let results: Memory[]
-      if (input.query) {
-        results = await searchMemories({
-          query: input.query,
-          limit: fetchLimit,
-          pinned: input.pinned,
-          archived: input.include_archived,
-        })
-        if (input.project)    results = results.filter(m => m.project === input.project)
-        if (input.type)       results = results.filter(m => m.type === input.type)
-        if (input.scope)      results = results.filter(m => m.scope === input.scope)
-        if (input.session_id) results = results.filter((m: any) => m.session_id === input.session_id)
-        if (input.since)      results = results.filter(m => m.created_at >= input.since!)
-        if (input.until)      results = results.filter(m => m.created_at <= input.until! + 'T23:59:59')
+      if (isQueryMode) {
+        // Backend ignores anything beyond {query, limit, mode} here — filter everything
+        // else client-side rather than relying on the endpoint to honor it.
+        results = await searchMemories({ query: input.query!, limit: fetchLimit })
+        if (input.project)       results = results.filter(m => m.project === input.project)
+        if (input.type)          results = results.filter(m => m.type === input.type)
+        if (input.scope)         results = results.filter(m => m.scope === input.scope)
+        if (input.session_id)    results = results.filter(m => m.session_id === input.session_id)
+        if (input.tool)          results = results.filter(m => m.tool === input.tool)
+        if (input.collection_id) results = results.filter(m => m.collection_id === input.collection_id)
+        if (input.since)         results = results.filter(m => m.created_at >= input.since!)
+        if (input.until)         results = results.filter(m => m.created_at <= input.until! + 'T23:59:59')
+        if (input.pinned !== undefined) results = results.filter(m => Boolean(m.pinned) === input.pinned)
+        if (!input.include_archived)    results = results.filter(m => !m.archived_at)
       } else {
         results = await listMemories({
-          project:    input.project,
-          type:       input.type,
-          scope:      input.scope,
-          session_id: input.session_id,
-          since:      input.since,
-          until:      input.until,
-          sort:       input.sort,
-          limit:      fetchLimit,
+          project:          input.project,
+          type:             input.type,
+          scope:            input.scope,
+          session_id:       input.session_id,
+          tool:             input.tool,
+          collection_id:    input.collection_id,
+          include_archived: input.include_archived,
+          since:            input.since,
+          until:            input.until,
+          sort:             input.sort,
+          limit:            fetchLimit,
         })
-        // Defensive client-side filters — the list endpoint may not support these natively.
-        if (input.pinned !== undefined) results = results.filter((m: any) => Boolean(m.pinned) === input.pinned)
-        if (!input.include_archived)    results = results.filter((m: any) => !m.archived_at)
+        // Defensive client-side filter — the list endpoint does not filter on pinned status.
+        if (input.pinned !== undefined) results = results.filter(m => Boolean(m.pinned) === input.pinned)
       }
 
       if (input.tags?.length) {
@@ -1241,8 +1263,13 @@ server.tool(
       const violationsLines = violations.length > 0
         ? `\n\nViolations:\n${violations.map((v, i) => `${i + 1}. ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')}`
         : ''
+      // The backend response may carry fields beyond allowed/permitted/reason/message/violations
+      // (e.g. policy_id, evaluated_at). Surface them instead of silently dropping them.
+      const KNOWN_FIELDS = new Set(['allowed', 'permitted', 'reason', 'message', 'violations'])
+      const extra = Object.fromEntries(Object.entries(result).filter(([k]) => !KNOWN_FIELDS.has(k)))
+      const extraLine = Object.keys(extra).length > 0 ? `\nExtra: ${JSON.stringify(extra)}` : ''
       return {
-        content: [{ type: 'text', text: `Policy check: ${status}\nAction: ${action}\nResource: ${resource}${reasonLine}${violationsLines}` }],
+        content: [{ type: 'text', text: `Policy check: ${status}\nAction: ${action}\nResource: ${resource}${reasonLine}${violationsLines}${extraLine}` }],
       }
     } catch (err) {
       return {
@@ -2515,7 +2542,7 @@ server.tool(
 // health_check — unified health tool. Absorbs memory_health_check and quick_health_check.
 server.tool(
   'health_check',
-  'Check memory corpus health: total count, duplicates, stale (>30d), and untagged memories. Uses the backend health aggregate when available; falls back to a bounded sample-based estimate labeled as such.',
+  'Check memory corpus health: total count, duplicates, stale (>30d, based on updated_at falling back to created_at), too-short (<50 chars), and untagged memories. Uses the backend health aggregate when available; falls back to a bounded sample-based estimate (with up to 3 examples per issue) labeled as such.',
   {},
   async () => {
     try {
@@ -2549,18 +2576,28 @@ server.tool(
       ])
       const all = memories ?? []
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-      const stale = all.filter(m => new Date(m.created_at) < thirtyDaysAgo)
+      // Stale is based on the last update, not creation — a memory edited last week isn't stale
+      // even if it was first created a year ago.
+      const stale = all.filter(m => new Date(m.updated_at ?? m.created_at) < thirtyDaysAgo)
       const untagged = all.filter(m => !m.tags || m.tags.length === 0)
+      const tooShort = all.filter(m => m.content.length < 50)
       const dupeCount = duplicates?.length ?? 0
+
+      const exampleLines = (label: string, items: Memory[]) => items.length === 0
+        ? []
+        : [`  Examples: ${items.slice(0, 3).map(m => `[${m.id}] ${m.content.slice(0, 60)}${m.content.length > 60 ? '…' : ''}`).join(' | ')}`]
 
       const text = [
         `## Memory Health (sample-based estimate, ${all.length} memories)`,
         `- Duplicates: ${dupeCount}`,
         `- Stale (>30d): ${stale.length}`,
+        `- Too short (<50 chars): ${tooShort.length}`,
+        ...exampleLines('too_short', tooShort),
         `- Untagged: ${untagged.length}`,
         '',
         dupeCount > 0 ? '⚠️ Run `find_duplicate_memories` for exact duplicates.' : '✅ No obvious duplicates.',
         stale.length > 10 ? '⚠️ Many stale memories — consider archiving old ones.' : '✅ Memory freshness looks good.',
+        tooShort.length > 10 ? '⚠️ Many too-short memories — consider expanding or merging them.' : '✅ Content length looks good.',
         untagged.length > 10 ? '⚠️ Many untagged memories — use `search_and_tag` to categorize.' : '✅ Tagging coverage looks good.',
       ].join('\n')
 
