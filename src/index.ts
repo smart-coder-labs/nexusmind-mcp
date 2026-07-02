@@ -2451,9 +2451,14 @@ server.tool(
         .filter((c: any) => !c.archived_at)
         .sort((a: any, b: any) => b.weight - a.weight)
 
-      const conventionText = active.map((c: any) =>
-        `[${c.category?.toUpperCase() ?? 'GENERAL'} - weight:${c.weight ?? 0}] ${c.title ?? `Convention ${c.id}`}:\n${c.content}`
-      ).join('\n\n---\n\n')
+      const CONVENTION_TEXT_CAP = 300
+      const conventionText = active.map((c: any) => {
+        const truncated = c.content.length > CONVENTION_TEXT_CAP
+        const body = truncated
+          ? `${c.content.slice(0, CONVENTION_TEXT_CAP)}… (truncated — use get_convention(${c.id}) for full text)`
+          : c.content
+        return `[${c.category?.toUpperCase() ?? 'GENERAL'} - weight:${c.weight ?? 0}] ${c.title ?? `Convention ${c.id}`}:\n${body}`
+      }).join('\n\n---\n\n')
 
       const text = [
         'Convention Compliance Check',
