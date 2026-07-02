@@ -253,7 +253,7 @@ server.tool(
 
       const [memories, conventions] = await Promise.all([
         wantMemories    ? listMemories({ project, limit: limit ?? 40 }) : Promise.resolve([]),
-        wantConventions ? listConventions() : Promise.resolve([]),
+        wantConventions ? listConventions(undefined, undefined, project) : Promise.resolve([]),
       ])
 
       if (memories.length === 0 && conventions.length === 0) {
@@ -3064,7 +3064,7 @@ server.tool(
 
       // 2. Fetch everything in parallel
       const [conventions, memories, projects, stats, org] = await Promise.all([
-        listConventions({ limit: 50 } as any).catch(() => []),
+        listConventions(undefined, undefined, project).catch(() => []),
         searchMemories({ query: '', limit: 10 }).catch(() => []),
         listProjects({}).catch(() => []),
         getStats().catch(() => ({})),
