@@ -15,7 +15,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, getProjectContext, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, getSessionMemories, createSession, getMemoryTimeline, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject } from './client.js'
-import type { Memory, CodeSearchResult, CodeChunk, Session, Convention } from './client.js'
+import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth } from './client.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -2657,14 +2657,39 @@ server.tool(
   {},
   async () => {
     try {
+      // Prefer the cheap backend aggregate — avoids fetching full records just to count them.
+      let health: MemoryHealth | null = null
+      try {
+        health = await getMemoryHealth()
+      } catch {
+        health = null
+      }
+
+      if (health && health.total_memories !== undefined) {
+        const report = {
+          total: health.total_memories,
+          source: 'authoritative (backend aggregate)',
+          issues: {
+            duplicates: health.duplicate_count ?? 0,
+            stale: health.stale_count ?? 0,
+            no_tags: health.untagged_count ?? 0,
+          },
+        }
+        return {
+          content: [{ type: 'text', text: `Memory Health Report:\n${JSON.stringify(report, null, 2)}` }],
+        }
+      }
+
+      // Degrade to a bounded sample instead of a large full-record fetch.
       const [memories, duplicates] = await Promise.all([
-        listMemories({ limit: 200 }),
-        findDuplicateMemories(),
+        listMemories({ limit: 100 }),
+        findDuplicateMemories().catch(() => []),
       ])
       const now = Date.now()
       const ninetyDaysAgo = now - 90 * 24 * 60 * 60 * 1000
       const report = {
         total: memories.length,
+        source: 'sample-based estimate (backend health endpoint unavailable)',
         issues: {
           duplicates: duplicates?.length ?? 0,
           too_short: memories.filter(m => m.content.length < 50).length,
@@ -2719,8 +2744,8 @@ server.tool(
         return { content: [{ type: 'text', text }] }
       }
 
-      // Fall back to client-side computation
-      const memories = await searchMemories({ query: '', limit: 500 })
+      // Fall back to a bounded sample-based estimate — never a large full-record fetch
+      const memories = await listMemories({ limit: 100 })
       const all = memories ?? []
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
 
@@ -2737,7 +2762,7 @@ server.tool(
       })
 
       const text = [
-        `## Memory Health (sample of ${all.length})`,
+        `## Memory Health (sample-based estimate, ${all.length} memories)`,
         `- Stale (>30d): ${stale.length}`,
         `- Untagged: ${untagged.length}`,
         `- Estimated duplicates: ${dupes}`,
