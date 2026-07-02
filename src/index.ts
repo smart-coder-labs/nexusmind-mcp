@@ -2567,10 +2567,10 @@ server.tool(
   }
 )
 
-// memory_health_check
+// health_check — unified health tool. Absorbs memory_health_check and quick_health_check.
 server.tool(
-  'memory_health_check',
-  'Audit the memory corpus for quality issues: finds duplicates, very short memories (< 50 chars), very old memories (> 90 days), and memories with no tags. Returns a structured report with counts and examples.',
+  'health_check',
+  'Check memory corpus health: total count, duplicates, stale (>30d), and untagged memories. Uses the backend health aggregate when available; falls back to a bounded sample-based estimate labeled as such.',
   {},
   async () => {
     try {
@@ -2583,108 +2583,38 @@ server.tool(
       }
 
       if (health && health.total_memories !== undefined) {
-        const report = {
-          total: health.total_memories,
-          source: 'authoritative (backend aggregate)',
-          issues: {
-            duplicates: health.duplicate_count ?? 0,
-            stale: health.stale_count ?? 0,
-            no_tags: health.untagged_count ?? 0,
-          },
-        }
-        return {
-          content: [{ type: 'text', text: `Memory Health Report:\n${JSON.stringify(report, null, 2)}` }],
-        }
-      }
-
-      // Degrade to a bounded sample instead of a large full-record fetch.
-      const [memories, duplicates] = await Promise.all([
-        listMemories({ limit: 100 }),
-        findDuplicateMemories().catch(() => []),
-      ])
-      const now = Date.now()
-      const ninetyDaysAgo = now - 90 * 24 * 60 * 60 * 1000
-      const report = {
-        total: memories.length,
-        source: 'sample-based estimate (backend health endpoint unavailable)',
-        issues: {
-          duplicates: duplicates?.length ?? 0,
-          too_short: memories.filter(m => m.content.length < 50).length,
-          no_tags: memories.filter(m => !m.tags || m.tags.length === 0).length,
-          stale: memories.filter(m => new Date(m.created_at).getTime() < ninetyDaysAgo).length,
-        },
-        examples: {
-          too_short: memories.filter(m => m.content.length < 50).slice(0, 3).map(m => ({ id: m.id, content: m.content })),
-          no_tags: memories.filter(m => !m.tags || m.tags.length === 0).slice(0, 3).map(m => ({ id: m.id, content: m.content.slice(0, 80) })),
-        },
-      }
-      return {
-        content: [{ type: 'text', text: `Memory Health Report:\n${JSON.stringify(report, null, 2)}` }],
-      }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      }
-    }
-  }
-)
-
-// quick_health_check
-server.tool(
-  'quick_health_check',
-  'Fast memory health summary: total count, duplicates, stale memories (>30 days old), and untagged memories. Uses the backend health endpoint for authoritative counts; falls back to client-side computation if unavailable.',
-  {},
-  async () => {
-    try {
-      // Try backend endpoint first (returns real counts from DB)
-      let health: any = null
-      try {
-        health = await getMemoryHealth()
-      } catch (_) {
-        health = null
-      }
-
-      if (health && health.total_memories !== undefined) {
-        // Use authoritative backend data
         const text = [
           '## Memory Health (authoritative)',
           `- Total memories: ${health.total_memories}`,
-          `- Duplicates: ${health.duplicate_count}`,
-          `- Stale (>30d): ${health.stale_count}`,
-          `- Untagged: ${health.untagged_count}`,
+          `- Duplicates: ${health.duplicate_count ?? 0}`,
+          `- Stale (>30d): ${health.stale_count ?? 0}`,
+          `- Untagged: ${health.untagged_count ?? 0}`,
           '',
-          health.duplicate_count > 0 ? '⚠️ Run `find_duplicate_memories` for details.' : '✅ No duplicates.',
-          health.stale_count > 10 ? '⚠️ Many stale memories — consider archiving.' : '✅ Memory freshness good.',
-          health.untagged_count > 10 ? '⚠️ Many untagged — use `search_and_tag` to categorize.' : '✅ Tagging coverage good.',
+          (health.duplicate_count ?? 0) > 0 ? '⚠️ Run `find_duplicate_memories` for details.' : '✅ No duplicates.',
+          (health.stale_count ?? 0) > 10  ? '⚠️ Many stale memories — consider archiving.' : '✅ Memory freshness good.',
+          (health.untagged_count ?? 0) > 10 ? '⚠️ Many untagged — use `search_and_tag` to categorize.' : '✅ Tagging coverage good.',
         ].join('\n')
         return { content: [{ type: 'text', text }] }
       }
 
-      // Fall back to a bounded sample-based estimate — never a large full-record fetch
-      const memories = await listMemories({ limit: 100 })
+      // Degrade to a bounded sample instead of a large full-record fetch — labeled as an estimate.
+      const [memories, duplicates] = await Promise.all([
+        listMemories({ limit: 100 }),
+        findDuplicateMemories().catch(() => []),
+      ])
       const all = memories ?? []
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-
-      const stale = all.filter((m: any) => new Date(m.updated_at ?? m.created_at) < thirtyDaysAgo)
-      const untagged = all.filter((m: any) => !m.tags?.length)
-
-      // Estimate duplicates: same content first 100 chars
-      const seen = new Set<string>()
-      let dupes = 0
-      all.forEach((m: any) => {
-        const key = (m.content ?? '').slice(0, 100).toLowerCase().trim()
-        if (seen.has(key)) dupes++
-        else seen.add(key)
-      })
+      const stale = all.filter(m => new Date(m.created_at) < thirtyDaysAgo)
+      const untagged = all.filter(m => !m.tags || m.tags.length === 0)
+      const dupeCount = duplicates?.length ?? 0
 
       const text = [
         `## Memory Health (sample-based estimate, ${all.length} memories)`,
+        `- Duplicates: ${dupeCount}`,
         `- Stale (>30d): ${stale.length}`,
         `- Untagged: ${untagged.length}`,
-        `- Estimated duplicates: ${dupes}`,
         '',
-        dupes > 0 ? '⚠️ Run `find_duplicate_memories` for exact duplicates.' : '✅ No obvious duplicates.',
+        dupeCount > 0 ? '⚠️ Run `find_duplicate_memories` for exact duplicates.' : '✅ No obvious duplicates.',
         stale.length > 10 ? '⚠️ Many stale memories — consider archiving old ones.' : '✅ Memory freshness looks good.',
         untagged.length > 10 ? '⚠️ Many untagged memories — use `search_and_tag` to categorize.' : '✅ Tagging coverage looks good.',
       ].join('\n')
