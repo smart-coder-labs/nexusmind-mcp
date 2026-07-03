@@ -5,6 +5,7 @@
 // format/emit output the way Codex expects.
 import { spawnSync } from 'node:child_process'
 import { basename } from 'node:path'
+import { readFile } from 'node:fs/promises'
 
 export const DEFAULT_BASE_URL = 'https://nexusmind-backend.fly.dev'
 export const HEALTH_TIMEOUT_MS = 5000
@@ -141,4 +142,153 @@ export function emitAdditionalContext(hookEventName: string, text: string): void
  *  can otherwise keep the event loop alive well past when the hook is done. */
 export function exitClean(code = 0): never {
   process.exit(code)
+}
+
+/** Emits the `{"decision":"block","reason":"..."}` envelope Codex reads from a
+ *  Stop hook's stdout to force the turn to continue instead of ending. Only
+ *  Stop should call this — SubagentStop is observation-only. */
+export function emitBlockDecision(reason: string): void {
+  process.stdout.write(JSON.stringify({ decision: 'block', reason }) + '\n')
+}
+
+// ── Transcript parsing (JSONL) ───────────────────────────────────────────────
+// Shared by pre-compact.ts (recent-message snapshot) and stop.ts (Stop gate).
+// Mirrors the Python parsing logic in the Claude plugin's pre-compact.sh /
+// session-stop.sh byte-for-byte so behavior stays consistent across ports.
+
+interface TranscriptContentItem {
+  type?: string
+  text?: string
+  name?: string
+}
+
+interface TranscriptMessage {
+  role?: string
+  content?: string | TranscriptContentItem[]
+}
+
+interface TranscriptEntry {
+  type?: string
+  isMeta?: boolean
+  message?: TranscriptMessage
+}
+
+// Synthetic user-type entries (isMeta preludes, hook/skill injections, local
+// command output, system notifications) must NOT count as real turn
+// boundaries — only genuine user-typed text does.
+const SYNTHETIC_TEXT_PREFIXES = [
+  '<system-reminder>',
+  '[SYSTEM NOTIFICATION',
+  'Caveat:',
+  '<command-name>',
+  '<local-command-stdout>',
+  '<task-notification>',
+]
+
+function startsWithSyntheticPrefix(text: string): boolean {
+  const trimmed = text.trimStart()
+  return SYNTHETIC_TEXT_PREFIXES.some(prefix => trimmed.startsWith(prefix))
+}
+
+function isRealUserText(entry: TranscriptEntry): boolean {
+  if (entry.type !== 'user') return false
+  if (entry.isMeta) return false
+  const message = entry.message ?? {}
+  if (message.role !== 'user') return false
+  const content = message.content
+  if (typeof content === 'string') {
+    const text = content.trim()
+    return text.length > 0 && !startsWithSyntheticPrefix(text)
+  }
+  if (!Array.isArray(content)) return false
+  for (const item of content) {
+    if (item && typeof item === 'object' && item.type === 'text') {
+      const text = (item.text ?? '').trim()
+      if (text && !startsWithSyntheticPrefix(text)) return true
+    }
+  }
+  return false
+}
+
+/** Reads a JSONL transcript, skipping unparseable lines defensively — same
+ *  tolerance as the bash reference's Python parsing. Returns [] on any I/O
+ *  error (missing file, unreadable path) instead of throwing. */
+async function readTranscriptEntries(transcriptPath?: string): Promise<TranscriptEntry[]> {
+  if (!transcriptPath) return []
+  let raw: string
+  try {
+    raw = await readFile(transcriptPath, 'utf8')
+  } catch {
+    return []
+  }
+  const entries: TranscriptEntry[] = []
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    try {
+      entries.push(JSON.parse(trimmed))
+    } catch {
+      // skip malformed line
+    }
+  }
+  return entries
+}
+
+/** Extracts the last `limit` assistant text messages from a JSONL transcript,
+ *  joined with the same "\n\n---\n\n" separator the bash reference uses. */
+export async function extractRecentAssistantText(transcriptPath: string | undefined, limit: number): Promise<string> {
+  const entries = await readTranscriptEntries(transcriptPath)
+  const messages: string[] = []
+  for (const entry of entries) {
+    if (entry.type !== 'assistant') continue
+    const content = entry.message?.content
+    if (!Array.isArray(content)) continue
+    for (const item of content) {
+      if (item && typeof item === 'object' && item.type === 'text' && item.text) {
+        messages.push(item.text)
+      }
+    }
+  }
+  return messages.slice(-limit).join('\n\n---\n\n')
+}
+
+export interface TranscriptSinceLastUser {
+  assistantText: string
+  hasStoreMemory: boolean
+}
+
+/** Analyzes transcript entries after the last REAL user text message (turn
+ *  boundary), collecting assistant text and whether a store_memory tool_use
+ *  occurred in that span. Tool names may be MCP-namespaced, so `store_memory`
+ *  is matched by substring. If no real user message exists, falls back to
+ *  scanning the whole transcript (mirrors session-stop.sh, which has no
+ *  fallback-tail variant — that's session-end.sh's behavior, and Codex has no
+ *  SessionEnd event to attach it to). */
+export async function analyzeSinceLastRealUser(transcriptPath: string | undefined): Promise<TranscriptSinceLastUser> {
+  const entries = await readTranscriptEntries(transcriptPath)
+
+  let lastUserIdx = -1
+  entries.forEach((entry, i) => {
+    if (isRealUserText(entry)) lastUserIdx = i
+  })
+
+  const span = lastUserIdx >= 0 ? entries.slice(lastUserIdx + 1) : entries
+
+  const assistantText: string[] = []
+  let hasStoreMemory = false
+  for (const entry of span) {
+    if (entry.type !== 'assistant') continue
+    const content = entry.message?.content
+    if (!Array.isArray(content)) continue
+    for (const item of content) {
+      if (!item || typeof item !== 'object') continue
+      if (item.type === 'text') {
+        assistantText.push(item.text ?? '')
+      } else if (item.type === 'tool_use' && typeof item.name === 'string' && item.name.includes('store_memory')) {
+        hasStoreMemory = true
+      }
+    }
+  }
+
+  return { assistantText: assistantText.join('\n'), hasStoreMemory }
 }

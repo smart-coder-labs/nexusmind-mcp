@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- Codex CLI `PreCompact` hook (`dist/hooks/pre-compact.js`): saves a session snapshot
+  (last ~15 assistant messages, 2000-char truncation, skipped below 100 chars) before
+  compaction destroys context. Codex's `PreCompact` runs synchronously and blocking
+  before compaction proceeds, so the save is guaranteed to complete first. Ported from
+  the Claude plugin's `pre-compact.sh`; upserts into the same `session-snapshot/{session_id}`
+  topic key a same-session `PreCompact` snapshot would already use, avoiding duplicates.
+  Wired into `installCodexHooks`'s event mapping and the copied hook runtime.
+
+### Changed
+
+- Codex CLI `Stop` hook (`dist/hooks/stop.js`) is no longer passive capture — it is
+  now an **enforcement gate**, matching the Claude plugin's `session-stop.sh`. If the
+  turn since the last real user message looks decision-like (matches the same keyword
+  regex used elsewhere) and no `store_memory` tool call happened in that span, it emits
+  `{"decision":"block","reason":"..."}` so Codex continues the turn instead of ending
+  it — once per session, tracked via a state file under
+  `${XDG_CACHE_HOME:-$HOME/.cache}/nexusmind/stop-gate-{session_id}` (written before the
+  block decision is emitted, so an unwritable cache dir fails open instead of blocking
+  every turn). Guards against re-triggering itself via the `stop_hook_active` flag, and
+  is disabled entirely with `NEXUSMIND_STOP_GATE=off`.
+- `SubagentStop` keeps the previous quality-gated passive-capture behavior unchanged —
+  `stop.js` now branches on `hook_event_name` to run genuinely different logic for
+  `Stop` vs. `SubagentStop`, where before both shared the same passive-capture code path.
+
+### Notes
+
+- Codex has no `SessionEnd` event — `Stop` is its final per-turn lifecycle hook (see
+  https://developers.openai.com/codex/hooks). The Claude plugin's `session-end.sh`
+  fallback-summary behavior therefore has no direct Codex port; the `Stop` gate above
+  is the closest analog, and it enforces a save rather than silently performing one.
+- `PostCompact` (`dist/hooks/post-compact.js`) was already emitting the required
+  `hookSpecificOutput` envelope — verified, no change needed.
+
+## 0.5.2
+
+### Fixed
+
+- Codex hooks were written in a shape Codex silently ignores — flat event arrays at
+  the top level of `hooks.json` (`{ "SessionStart": [entry] }`). Codex expects
+  matcher groups nested under a top-level `hooks` key:
+  `{ "hooks": { "SessionStart": [{ "hooks": [entry] }] } }`
+  (see https://developers.openai.com/codex/hooks). This is why `/hooks` inside
+  Codex showed nothing to trust and the memory protocol never fired. Setup now
+  writes the correct schema, migrates away the old flat keys, preserves hook
+  groups registered by other tools, and stays idempotent across re-runs.
+- `hooks.json` is never overwritten when it exists but cannot be parsed — setup
+  reports the problem and leaves the file untouched.
+
+## 0.5.1
+
+### Fixed
+
+- `setup` now works out of the box on Windows and macOS when the NexusMind Claude
+  plugin is not installed. Previously it only printed `/plugin marketplace add` /
+  `/plugin install` instructions and configured nothing. It now falls back to
+  registering the MCP server directly in `~/.claude.json`, embedding the real
+  `NEXUSMIND_API_KEY` / `NEXUSMIND_BASE_URL` values instead of `${VAR}` shell
+  placeholders — shell rc files (`~/.zshrc`, `~/.bashrc`) don't exist on Windows,
+  so the placeholder approach never worked there. Installing the plugin later
+  remains the recommended upgrade path; setup prints the instructions and the
+  `claude mcp remove nexusmind` cleanup command.
+- Setup never overwrites a `~/.claude.json` it cannot parse: on invalid JSON it
+  leaves the file untouched and prints a manual `claude mcp add` command instead.
+  (Previously a parse error was treated as an empty file, which would have wiped
+  the user's config on write-back.)
+- When the plugin **is** installed and a direct `mcpServers.nexusmind` entry also
+  exists, setup warns about the duplicate registration with the removal command.
+- Final Claude Code instructions now say "Restart Claude Code" instead of
+  `source ~/.zshrc`, which is meaningless on Windows and no longer required.
+
 ## 0.5.0
 
 Breaking: tool count reduced from 116 to 103 by consolidating overlapping read/write

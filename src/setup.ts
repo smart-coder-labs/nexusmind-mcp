@@ -6,7 +6,7 @@
  * Usage:
  *   npx @smart-coder-labs/nexusmind-mcp setup
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,7 +22,9 @@ const CLAUDE_SETTINGS       = join(HOME, '.claude', 'settings.json')
 const INSTALLED_PLUGINS_JSON = join(HOME, '.claude', 'plugins', 'installed_plugins.json')
 const CURSOR_GLOBAL         = join(HOME, '.cursor', 'mcp.json')
 // This file is dist/setup.js when built/published — hooks live alongside it at
-// dist/hooks/*.js, so THIS_DIR is already the right base for hook script paths.
+// dist/hooks/*.js. THIS_DIR is the SOURCE used to populate the stable hook
+// runtime (see copyHookRuntime()); hook commands themselves point at that
+// stable copy, not at THIS_DIR — see hookCommand() for why.
 const THIS_DIR              = dirname(fileURLToPath(import.meta.url))
 
 const GITHUB_REPO       = 'smart-coder-labs/nexusmind-claude-plugin'
@@ -59,6 +61,14 @@ const error   = (msg: string) => console.error(`${c.red}✗${c.reset} ${msg}`)
 function readJson(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {}
   try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return {} }
+}
+
+// Like readJson, but distinguishes "missing" from "unparseable". Writing back a
+// {} obtained from a corrupt file would destroy its contents — callers that
+// rewrite large user-owned files (~/.claude.json) must use this variant.
+function readJsonStrict(path: string): Record<string, unknown> | null {
+  if (!existsSync(path)) return {}
+  try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return null }
 }
 
 function writeJson(path: string, data: Record<string, unknown>) {
@@ -124,6 +134,54 @@ function hasLegacyClaudeJsonEntry(): boolean {
   return 'nexusmind' in mcpServers
 }
 
+// Removes a duplicate ~/.claude.json mcpServers.nexusmind entry once the plugin
+// is installed (the plugin owns registration; a leftover direct entry from an
+// old setup run or a previous fallback install would otherwise duplicate it).
+// Uses readJsonStrict — see the comment above it — so an unparseable file is
+// left untouched instead of being silently reset. Returns whether an entry
+// was actually removed.
+export function removeLegacyClaudeJsonEntry(path: string = CLAUDE_JSON_PATH): boolean {
+  const data = readJsonStrict(path)
+  if (data === null) {
+    error(`${path} exists but is not valid JSON — not touching it.`)
+    log('  Fix the file, then remove the duplicate entry manually:')
+    log(`    ${c.cyan}claude mcp remove nexusmind${c.reset}`)
+    return false
+  }
+  const mcpServers = (data.mcpServers as Record<string, unknown>) ?? {}
+  if (!('nexusmind' in mcpServers)) return false
+  delete mcpServers['nexusmind']
+  data.mcpServers = mcpServers
+  writeJson(path, data)
+  return true
+}
+
+// Fallback registration when the plugin is not installed: write the MCP server
+// directly into ~/.claude.json so setup works out of the box on every platform.
+// Real values (not ${VAR} placeholders) — Windows has no ~/.zshrc, so shell env
+// vars written by writeShellEnv never reach Claude Code there.
+function writeClaudeJsonMcpEntry(apiKey: string, baseUrl: string): boolean {
+  const data = readJsonStrict(CLAUDE_JSON_PATH)
+  if (data === null) {
+    error(`${CLAUDE_JSON_PATH} exists but is not valid JSON — not touching it.`)
+    log('  Fix the file, then re-run setup, or register manually:')
+    log(`    ${c.cyan}claude mcp add nexusmind --scope user --env NEXUSMIND_API_KEY=${apiKey || '<key>'} --env NEXUSMIND_BASE_URL=${baseUrl} -- npx -y @smart-coder-labs/nexusmind-mcp@latest${c.reset}`)
+    return false
+  }
+  const mcpServers = (data.mcpServers as Record<string, unknown>) ?? {}
+  mcpServers['nexusmind'] = {
+    command: 'npx',
+    args: ['-y', '@smart-coder-labs/nexusmind-mcp@latest'],
+    env: {
+      NEXUSMIND_API_KEY: apiKey,
+      NEXUSMIND_BASE_URL: baseUrl,
+    },
+  }
+  data.mcpServers = mcpServers
+  writeJson(CLAUDE_JSON_PATH, data)
+  return true
+}
+
 function installClaudeCode(apiKey: string, baseUrl: string) {
   // Clean up stale absolute-path hooks from old installs
   const settings = readJson(CLAUDE_SETTINGS)
@@ -152,21 +210,25 @@ function installClaudeCode(apiKey: string, baseUrl: string) {
 
   if (isNexusmindPluginInstalled()) {
     success('NexusMind plugin detected — MCP registration is handled by the plugin')
+    // A direct ~/.claude.json entry (old setup, or a previous fallback install)
+    // duplicates the plugin's own registration.
+    if (hasLegacyClaudeJsonEntry()) {
+      warn(`Duplicate MCP registration detected in ${CLAUDE_JSON_PATH}`)
+      log('  The plugin already registers NexusMind, so the direct `mcpServers.nexusmind`')
+      log('  entry causes tools to load twice. Remove it with:')
+      log(`    ${c.cyan}claude mcp remove nexusmind${c.reset}`)
+    }
   } else {
-    warn('NexusMind plugin not installed — it is the canonical way to register NexusMind with Claude Code')
-    log('  Inside Claude Code, run:')
+    info('NexusMind plugin not installed — registering the MCP server directly')
+    if (writeClaudeJsonMcpEntry(apiKey, baseUrl)) {
+      success(`MCP server → ${CLAUDE_JSON_PATH}`)
+    }
+    log('')
+    log('  Optional: the plugin adds hooks and slash commands on top of the MCP server.')
+    log('  To upgrade later, inside Claude Code run:')
     log(`    ${c.cyan}/plugin marketplace add ${GITHUB_REPO}${c.reset}`)
     log(`    ${c.cyan}/plugin install ${PLUGIN_KEY}${c.reset}`)
-  }
-
-  if (hasLegacyClaudeJsonEntry()) {
-    warn(`${c.bold}Legacy MCP registration detected in ${CLAUDE_JSON_PATH}${c.reset}`)
-    log('  An older version of this setup wrote a `mcpServers.nexusmind` entry directly')
-    log(`  into ${c.dim}${CLAUDE_JSON_PATH}${c.reset}. That file is no longer managed by setup, so this`)
-    log('  entry is never cleaned up automatically. If the plugin is also installed, NexusMind')
-    log('  ends up registered twice, which can duplicate tools or cause conflicting behavior.')
-    log('  Remove the legacy entry with:')
-    log(`    ${c.cyan}claude mcp remove nexusmind${c.reset}`)
+    log(`  then remove the direct entry: ${c.cyan}claude mcp remove nexusmind${c.reset}`)
   }
 }
 
@@ -231,11 +293,53 @@ interface CodexHookDef {
   timeout: number
 }
 
-// Absolute node path avoids Windows .cmd shim issues; absolute dist path means
-// the hook works regardless of Codex's cwd.
+// Codex hooks.json nests handlers inside matcher groups under a top-level
+// "hooks" key: { hooks: { Event: [{ matcher?, hooks: [entry] }] } }.
+// See https://developers.openai.com/codex/hooks
+interface CodexMatcherGroup {
+  matcher?: string
+  hooks: CodexHookDef[]
+}
+
+// Stable per-user location for the copied hook runtime — overridable via
+// NEXUSMIND_HOOK_RUNTIME_DIR (read at call time, not cached, so tests can
+// point it at a temp dir), same pattern as codexHomeDir().
+function hookRuntimeDir(): string {
+  return process.env.NEXUSMIND_HOOK_RUNTIME_DIR || join(HOME, '.nexusmind', 'hook-runtime')
+}
+
+const HOOK_RUNTIME_FILES = ['_helpers.js', 'session-start.js', 'user-prompt-submit.js', 'pre-compact.js', 'post-compact.js', 'stop.js']
+
+// Copies the compiled hook runtime (hooks/*.js plus client.js, which they
+// import) from this package's dist directory into the stable per-user
+// location returned by hookRuntimeDir(), preserving the hooks/*.js ->
+// ../client.js relative import. THIS_DIR (the copy source) can point inside a
+// transient npx cache that later gets wiped, so hook commands must run from
+// this stable copy instead of THIS_DIR — see hookCommand(). Every setup run
+// overwrites the copy so upgrades refresh it; there is no diff/merge step.
+export function copyHookRuntime(sourceDir: string = THIS_DIR, destDir: string = hookRuntimeDir()): boolean {
+  const sourceClient = join(sourceDir, 'client.js')
+  if (!existsSync(sourceClient)) {
+    error(`Cannot find ${sourceClient} — this package was not built correctly.`)
+    return false
+  }
+  mkdirSync(join(destDir, 'hooks'), { recursive: true })
+  copyFileSync(sourceClient, join(destDir, 'client.js'))
+  for (const f of HOOK_RUNTIME_FILES) {
+    copyFileSync(join(sourceDir, 'hooks', f), join(destDir, 'hooks', f))
+  }
+  return true
+}
+
+// Absolute node path avoids Windows .cmd shim issues. The script path points
+// at the stable hook-runtime copy (see copyHookRuntime()) rather than
+// THIS_DIR — when installed via npx, THIS_DIR resolves inside the npx cache,
+// and once that cache is cleaned the script can no longer be found, so the
+// hook process exits 1 ("Cannot find module") even though the handler itself
+// always exits 0.
 function hookCommand(scriptFile: string): CodexHookDef {
   const nodeBin     = process.execPath
-  const scriptPath  = join(THIS_DIR, 'hooks', scriptFile)
+  const scriptPath  = join(hookRuntimeDir(), 'hooks', scriptFile)
   const commandLine = `"${nodeBin}" "${scriptPath}"`
   return {
     type: 'command',
@@ -245,32 +349,51 @@ function hookCommand(scriptFile: string): CodexHookDef {
   }
 }
 
-// Merges one hook entry into an existing event array — replaces any prior
+// Merges one hook entry into an event's matcher-group array — removes any prior
 // NexusMind entry for the same script (idempotent re-run) without touching
-// entries other tools registered for the same event.
-function mergeHookEntry(existing: unknown, entry: CodexHookDef, marker: string): CodexHookDef[] {
-  const arr = Array.isArray(existing) ? (existing as CodexHookDef[]) : []
-  const filtered = arr.filter(h => !(typeof h?.command === 'string' && h.command.includes(marker)))
-  filtered.push(entry)
-  return filtered
+// groups or entries other tools registered for the same event, then appends a
+// fresh matcher-less group (matches all) with our handler.
+function mergeHookEntry(existing: unknown, entry: CodexHookDef, marker: string): CodexMatcherGroup[] {
+  const groups = Array.isArray(existing) ? (existing as CodexMatcherGroup[]) : []
+  const kept: CodexMatcherGroup[] = []
+  for (const g of groups) {
+    if (!g || !Array.isArray(g.hooks)) continue
+    const hooks = g.hooks.filter(h => !(typeof h?.command === 'string' && h.command.includes(marker)))
+    if (hooks.length) kept.push({ ...g, hooks })
+  }
+  kept.push({ hooks: [entry] })
+  return kept
 }
 
-export function installCodexHooks() {
+export function installCodexHooks(sourceDir: string = THIS_DIR) {
+  if (!copyHookRuntime(sourceDir)) return
+
   const hooksPath = join(codexHomeDir(), 'hooks.json')
-  const data = readJson(hooksPath) as Record<string, unknown>
+  const data = readJsonStrict(hooksPath)
+  if (data === null) {
+    error(`${hooksPath} exists but is not valid JSON — not touching it. Fix or delete it and re-run setup.`)
+    return
+  }
 
   const mapping: Array<[string, string]> = [
     ['SessionStart', 'session-start.js'],
     ['UserPromptSubmit', 'user-prompt-submit.js'],
+    ['PreCompact', 'pre-compact.js'],
     ['PostCompact', 'post-compact.js'],
     ['Stop', 'stop.js'],
     ['SubagentStop', 'stop.js'],
   ]
 
+  const hooks = (data.hooks as Record<string, unknown>) ?? {}
+
   for (const [event, file] of mapping) {
-    data[event] = mergeHookEntry(data[event], hookCommand(file), file)
+    // Older versions of this setup wrote flat entries at the top level
+    // ({ SessionStart: [entry] }) — a shape Codex silently ignores. Drop them.
+    delete data[event]
+    hooks[event] = mergeHookEntry(hooks[event], hookCommand(file), file)
   }
 
+  data.hooks = hooks
   writeJson(hooksPath, data)
   success(`Hooks → ${hooksPath}`)
 }
@@ -396,8 +519,7 @@ export async function main() {
 
   if (doClaude) {
     log(`${c.bold}Claude Code${c.reset}`)
-    log('  • Run: source ~/.zshrc  (or open a new terminal)')
-    log('  • Registration is handled by the NexusMind plugin — install it if you have not (see above)')
+    log('  • Restart Claude Code (or start a new session) to load the MCP server')
     log('  • Tools available: store_memory, search_memories, get_context')
     log('')
   }
@@ -416,7 +538,7 @@ export async function main() {
   if (doCodex) {
     log(`${c.bold}Codex CLI${c.reset}`)
     log('  • Run: source ~/.zshrc  (or open a new terminal)')
-    log('  • Inside Codex, run /hooks and approve the NexusMind hooks (SessionStart, UserPromptSubmit, PostCompact, Stop, SubagentStop)')
+    log('  • Inside Codex, run /hooks and approve the NexusMind hooks (SessionStart, UserPromptSubmit, PreCompact, PostCompact, Stop, SubagentStop)')
     log('  • Tools available: store_memory, search_memories, get_context')
     log('')
   }

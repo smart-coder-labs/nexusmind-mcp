@@ -118,8 +118,14 @@ snippet to paste into `~/.codex/config.toml` yourself (setup never hand-edits
 |---|---|
 | `SessionStart` | `dist/hooks/session-start.js` — protocol reminder + project/recent memories |
 | `UserPromptSubmit` | `dist/hooks/user-prompt-submit.js` — recall-keyword-gated by default |
+| `PreCompact` | `dist/hooks/pre-compact.js` — session snapshot saved before compaction destroys context |
 | `PostCompact` | `dist/hooks/post-compact.js` — recovery instructions + recent memories |
-| `Stop`, `SubagentStop` | `dist/hooks/stop.js` — passive capture of decision-like output |
+| `SubagentStop` | `dist/hooks/stop.js` — quality-gated passive capture of decision-like subagent output |
+| `Stop` | `dist/hooks/stop.js` — enforcement gate: blocks the turn from ending (once per session) if it looks decision-like and nothing was saved via `store_memory` |
+
+Codex has no `SessionEnd` event (Stop is its final per-turn lifecycle hook), so the
+Claude plugin's session-end fallback save has no Codex equivalent — the Stop gate
+above is the closest analog, and it enforces rather than silently saves.
 
 **Codex does not auto-trust hooks.** After setup, open Codex and run `/hooks` to
 review and approve the NexusMind entries — they will not fire until you do.
@@ -137,6 +143,7 @@ native feature too.
 | `NEXUSMIND_API_KEY` | — | required; hooks no-op silently without it |
 | `NEXUSMIND_BASE_URL` | `https://nexusmind-backend.fly.dev` | backend URL |
 | `NEXUSMIND_PROMPT_INJECT` | `minimal` | `off` \| `minimal` \| `full` — controls `UserPromptSubmit` verbosity |
+| `NEXUSMIND_STOP_GATE` | `on` | `on` \| `off` — set to `off` to disable the `Stop` enforcement gate |
 | `NEXUSMIND_PROMPT_MEMORY_LIMIT` | `3` | memories shown per prompt in `full` mode |
 | `NEXUSMIND_SESSION_PROJECT_LIMIT` | `8` | project memories shown on `SessionStart` |
 | `NEXUSMIND_SESSION_RECENT_LIMIT` | `5` | recent memories shown on `SessionStart`/`PostCompact` |
