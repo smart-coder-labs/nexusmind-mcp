@@ -503,15 +503,17 @@ function formatCodeChunk(c: CodeChunk, index: number): string {
 // index_project
 server.tool(
   'index_project',
-  'Call before any semantic code search on an unindexed project, or when code has changed significantly. Chunks source files by symbol, embeds them, and persists to the code index.',
+  'Call before any semantic code search on an unindexed project, or when code has changed significantly. Chunks source files by symbol, embeds them, and persists to the code index. Supports both local directories (root_path) and remote GitHub repositories (repo_url). For private GitHub repos, provide a github_token with repo read scope.',
   {
-    project:    z.string().describe('Logical project name used as the search scope key'),
-    root_path:  z.string().describe('Absolute path to the project root directory to index'),
-    extensions: z.array(z.string()).optional().describe('File extensions to include (defaults to common code extensions)'),
+    project:      z.string().describe('Logical project name used as the search scope key'),
+    root_path:    z.string().optional().describe('Absolute path to the project root directory to index (use for local codebases)'),
+    repo_url:     z.string().optional().describe('GitHub repository URL to clone and index (e.g. https://github.com/owner/repo). Use for remote repos instead of root_path.'),
+    github_token: z.string().optional().describe('GitHub Personal Access Token for private repositories. Requires the repo (or contents:read) scope. Stored encrypted — never logged or returned in responses.'),
+    extensions:   z.array(z.string()).optional().describe('File extensions to include (defaults to common code extensions)'),
   },
-  async ({ project, root_path, extensions }) => {
+  async ({ project, root_path, repo_url, github_token, extensions }) => {
     try {
-      const res = await indexProject({ project, root_path, extensions })
+      const res = await indexProject({ project, root_path, repo_url, github_token, extensions })
       return {
         content: [{
           type: 'text',
@@ -519,8 +521,22 @@ server.tool(
         }],
       }
     } catch (err) {
+      const msg = (err as Error).message
+      // Surface actionable guidance for private-repo auth failures
+      if (msg.includes('PRIVATE_REPO_TOKEN_REQUIRED')) {
+        return {
+          content: [{ type: 'text', text: `This repository is not publicly accessible. Provide a github_token with the repo (read) scope and retry.` }],
+          isError: true,
+        }
+      }
+      if (msg.includes('TOKEN_ACCESS_DENIED') || msg.includes('PRIVATE_REPO_AUTH_FAILURE')) {
+        return {
+          content: [{ type: 'text', text: `The provided github_token cannot access this repository. Verify the token has the repo scope and permission to read this repo.` }],
+          isError: true,
+        }
+      }
       return {
-        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        content: [{ type: 'text', text: `Error: ${msg}` }],
         isError: true,
       }
     }

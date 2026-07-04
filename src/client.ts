@@ -211,7 +211,10 @@ export function unpinMemory(id: string): Promise<void> {
 
 export interface IndexProjectInput {
   project: string
-  root_path: string
+  root_path?: string
+  repo_url?: string
+  /** GitHub Personal Access Token for private repositories. Requires `repo` scope. */
+  github_token?: string
   extensions?: string[]
 }
 
@@ -258,11 +261,11 @@ export interface CodeChunk {
 // ── Code Index API calls ─────────────────────────────────────────────────────
 
 export function indexProject(input: IndexProjectInput): Promise<IndexProjectResponse> {
-  const body: Record<string, unknown> = {
-    project:   input.project,
-    root_path: input.root_path,
-  }
-  if (input.extensions) body.extensions = input.extensions
+  const body: Record<string, unknown> = { project: input.project }
+  if (input.root_path)    body.root_path    = input.root_path
+  if (input.repo_url)     body.repo_url     = input.repo_url
+  if (input.github_token) body.github_token = input.github_token
+  if (input.extensions)   body.extensions   = input.extensions
   return request<IndexProjectResponse>('/v1/code/index', { method: 'POST', body: JSON.stringify(body) })
 }
 
