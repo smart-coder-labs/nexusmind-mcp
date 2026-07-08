@@ -90,6 +90,20 @@ function mcpEntry() {
   }
 }
 
+// Persists the API key + base URL so future sessions — and, crucially, the
+// ${NEXUSMIND_API_KEY} / ${NEXUSMIND_BASE_URL} placeholders in every MCP
+// registration (the Claude plugin's .mcp.json, Cursor's mcp.json, the Codex
+// config.toml) — can resolve them. Platform-dispatched: POSIX shells read env
+// from rc files; Windows has no ~/.zshrc / ~/.bashrc, so the vars must go into
+// the persistent per-user environment instead (see writeWindowsEnv).
+function writeEnvVars(apiKey: string, baseUrl: string) {
+  if (process.platform === 'win32') {
+    writeWindowsEnv(apiKey, baseUrl)
+  } else {
+    writeShellEnv(apiKey, baseUrl)
+  }
+}
+
 function writeShellEnv(apiKey: string, baseUrl: string) {
   for (const rc of [join(HOME, '.zshrc'), join(HOME, '.bashrc')]) {
     if (!existsSync(rc)) continue
@@ -106,6 +120,30 @@ function writeShellEnv(apiKey: string, baseUrl: string) {
       success(`Env vars → ${rc}`)
     }
   }
+}
+
+// Windows persistent env vars via setx, which writes HKCU\Environment (User
+// scope) so every future process inherits them. Without this, setup wrote only
+// to shell rc files that don't exist on Windows, leaving NEXUSMIND_BASE_URL
+// unset — so clients failed with "Missing environment variables:
+// NEXUSMIND_BASE_URL" when expanding the ${...} placeholders in their MCP
+// config. setx only affects processes started AFTER it runs, so the user must
+// restart their client (already the documented post-setup step); we also mirror
+// the values into process.env so any same-run check sees them. Values here (an
+// API key + a URL) are far under setx's ~1024-char limit.
+function writeWindowsEnv(apiKey: string, baseUrl: string) {
+  const setVar = (name: string, value: string) => {
+    if (!value) return
+    const res = spawnSync('setx', [name, value], { stdio: 'ignore', shell: true })
+    if (!res.error && res.status === 0) {
+      process.env[name] = value
+      success(`Env var ${name} → Windows user environment`)
+    } else {
+      warn(`Could not set ${name} automatically — run this yourself: setx ${name} "${value}"`)
+    }
+  }
+  setVar('NEXUSMIND_API_KEY', apiKey)
+  setVar('NEXUSMIND_BASE_URL', baseUrl)
 }
 
 // ── Install helpers ───────────────────────────────────────────────────────────
@@ -206,7 +244,7 @@ function installClaudeCode(apiKey: string, baseUrl: string) {
     info('Removed stale hooks from previous install')
   }
 
-  writeShellEnv(apiKey, baseUrl)
+  writeEnvVars(apiKey, baseUrl)
 
   if (isNexusmindPluginInstalled()) {
     success('NexusMind plugin detected — MCP registration is handled by the plugin')
@@ -244,7 +282,7 @@ function installCursor(apiKey: string, baseUrl: string, scope: 'global' | 'proje
   writeJson(configPath, existing)
   success(`MCP server → ${configPath}`)
 
-  writeShellEnv(apiKey, baseUrl)
+  writeEnvVars(apiKey, baseUrl)
 }
 
 // ── Codex CLI ─────────────────────────────────────────────────────────────────
@@ -406,7 +444,7 @@ export function installCodexHooks(sourceDir: string = THIS_DIR) {
 }
 
 export function installCodex(apiKey: string, baseUrl: string) {
-  writeShellEnv(apiKey, baseUrl)
+  writeEnvVars(apiKey, baseUrl)
 
   if (isCodexCliAvailable()) {
     info('Registering MCP server via codex mcp add…')

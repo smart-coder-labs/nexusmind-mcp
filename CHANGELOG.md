@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.2
+
+### Fixed
+
+- Setup never set the NexusMind environment variables on Windows. `writeShellEnv`
+  only appended `export` lines to `~/.zshrc` / `~/.bashrc`, which don't exist on
+  Windows — so `NEXUSMIND_BASE_URL` (and often `NEXUSMIND_API_KEY`) stayed unset,
+  and every client that expands the `${NEXUSMIND_BASE_URL}` placeholder in its MCP
+  config (the Claude plugin's `.mcp.json`, Cursor's `mcp.json`) failed with
+  "Invalid MCP server config … Missing environment variables: NEXUSMIND_BASE_URL".
+  Env writing is now platform-dispatched: on Windows setup persists both vars to
+  the per-user environment via `setx` (falling back to a printed manual command if
+  that fails); POSIX behavior is unchanged. Re-run
+  `npx @smart-coder-labs/nexusmind-mcp setup` and restart your client.
+
+### CI / tests
+
+- Added a GitHub Actions matrix (`.github/workflows/ci.yml`) running the full
+  suite on Ubuntu, macOS, and Windows across Node 20 and 22.
+- `npm test` previously ran **zero** tests — Node's test runner does not discover
+  `.ts` files, so `tsx --test` matched nothing and passed vacuously. The `test`
+  script now names the test files explicitly and a `pretest` step builds first.
+- The hook subprocess tests spawned the `node_modules/.bin/tsx` shim directly,
+  which is not spawnable on Windows (`spawn ENOENT`); they now run the hook via
+  `node --import tsx <script>`, which is OS-portable.
+- New integration test executes every compiled hook as a real subprocess and
+  asserts it loads as ESM and exits 0 — guarding the 0.6.1 `SyntaxError` regression
+  on each OS in the matrix.
+
 ## 0.6.1
 
 ### Fixed
