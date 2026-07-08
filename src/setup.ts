@@ -328,6 +328,13 @@ export function copyHookRuntime(sourceDir: string = THIS_DIR, destDir: string = 
   for (const f of HOOK_RUNTIME_FILES) {
     copyFileSync(join(sourceDir, 'hooks', f), join(destDir, 'hooks', f))
   }
+  // The compiled hooks are ES modules (`import ... from './_helpers.js'`), but
+  // they live outside this package under a bare .js extension. Without a
+  // package.json declaring `"type": "module"` in the runtime dir, Node treats
+  // them as CommonJS and every hook crashes at load with
+  // "SyntaxError: Cannot use import statement outside a module" (exit 1), which
+  // Codex surfaces as a hook error. This marker makes Node load them as ESM.
+  writeFileSync(join(destDir, 'package.json'), JSON.stringify({ type: 'module' }, null, 2) + '\n')
   return true
 }
 

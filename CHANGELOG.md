@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.1
+
+### Fixed
+
+- Codex CLI hooks crashed on every event with `SyntaxError: Cannot use import
+  statement outside a module` (exit 1), so the memory protocol never fired. The
+  compiled hook runtime (`hooks/*.js` + `client.js`) is ES-module code, but
+  `copyHookRuntime()` copied it into `~/.nexusmind/hook-runtime/` without a
+  `package.json` — so Node defaulted those bare `.js` files to CommonJS and threw
+  at load before any handler ran. Setup now writes a `package.json` with
+  `{ "type": "module" }` into the runtime dir alongside the copied files, so Node
+  loads them as ESM. Re-run `npx @smart-coder-labs/nexusmind-mcp setup` (or just
+  the Codex target) to refresh the runtime dir.
+
 ## 0.6.0
 
 ### Added

@@ -46,6 +46,16 @@ test('copyHookRuntime copies client.js and all hook files preserving relative la
   })
 })
 
+test('copyHookRuntime writes a package.json marking the runtime dir as ESM', () => {
+  withTempDirs(({ sourceDir, destDir }) => {
+    copyHookRuntime(sourceDir, destDir)
+    const pkgPath = join(destDir, 'package.json')
+    assert.equal(existsSync(pkgPath), true, 'missing package.json — hooks would load as CJS and crash')
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+    assert.equal(pkg.type, 'module')
+  })
+})
+
 test('copyHookRuntime overwrites an existing destination on every call (recopy, no diff/merge)', () => {
   withTempDirs(({ sourceDir, destDir }) => {
     mkdirSync(join(destDir, 'hooks'), { recursive: true })
