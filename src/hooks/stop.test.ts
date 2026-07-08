@@ -9,7 +9,9 @@ import { tmpdir } from 'node:os'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const HOOK_SCRIPT = join(__dirname, 'stop.ts')
-const TSX_BIN = join(__dirname, '..', '..', 'node_modules', '.bin', 'tsx')
+// Run the hook through node's tsx loader (process.execPath + --import tsx)
+// rather than the node_modules/.bin/tsx shim: that shim has no extension and is
+// not directly spawnable on Windows (spawn ENOENT), which would break CI there.
 
 interface FakeBackend {
   port: number
@@ -39,7 +41,7 @@ function startFakeBackend(): Promise<FakeBackend> {
 
 function runHook(payload: unknown, env: NodeJS.ProcessEnv): Promise<{ stdout: string; code: number | null }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(TSX_BIN, [HOOK_SCRIPT], {
+    const child = spawn(process.execPath, ['--import', 'tsx', HOOK_SCRIPT], {
       env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     })

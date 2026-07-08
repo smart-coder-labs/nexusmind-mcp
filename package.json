@@ -1,6 +1,6 @@
 {
   "name": "@smart-coder-labs/nexusmind-mcp",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "NexusMind MCP server for Claude Code and Cursor — team memory that persists across sessions",
   "type": "module",
   "bin": {
@@ -13,7 +13,8 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "setup": "node dist/setup.js",
-    "test": "tsx --test",
+    "pretest": "tsc",
+    "test": "tsx --test src/setup.test.ts src/integration.test.ts src/hooks/pre-compact.test.ts src/hooks/stop.test.ts src/hooks/user-prompt-submit.test.ts",
     "prepublishOnly": "npm run build && npm test"
   },
   "files": [
