@@ -353,7 +353,10 @@ function printCodexTomlSnippet(apiKey: string, baseUrl: string) {
 interface CodexHookDef {
   type: 'command'
   command: string
-  command_windows: string
+  // camelCase — matches Codex's hooks.json schema (hookEventName,
+  // additionalContext, …). The old snake_case `command_windows` was silently
+  // ignored, so on Windows Codex fell back to `command` and could not spawn it.
+  commandWindows: string
   timeout: number
 }
 
@@ -402,20 +405,57 @@ export function copyHookRuntime(sourceDir: string = THIS_DIR, destDir: string = 
   return true
 }
 
-// Absolute node path avoids Windows .cmd shim issues. The script path points
-// at the stable hook-runtime copy (see copyHookRuntime()) rather than
-// THIS_DIR — when installed via npx, THIS_DIR resolves inside the npx cache,
-// and once that cache is cleaned the script can no longer be found, so the
-// hook process exits 1 ("Cannot find module") even though the handler itself
-// always exits 0.
+// Resolves an existing path to its 8.3 short form on Windows (e.g.
+// C:\Program Files -> C:\PROGRA~1), which contains no spaces. Uses the
+// FileSystemObject via PowerShell — the `cmd for %~sI` form mangles quoting when
+// spawned. Returns the input unchanged on non-Windows, on failure, or when 8.3
+// generation is disabled (the short form still contains a space). Memoized since
+// the node binary and hook-runtime dir repeat across all six hooks.
+const shortPathCache = new Map<string, string>()
+function windowsShortPath(p: string): string {
+  if (process.platform !== 'win32') return p
+  const cached = shortPathCache.get(p)
+  if (cached !== undefined) return cached
+  let result = p
+  try {
+    const ps = '$p=$env:NM_SHORTPATH_IN; $f=New-Object -ComObject Scripting.FileSystemObject;'
+      + ' if (Test-Path -LiteralPath $p -PathType Container) { $f.GetFolder($p).ShortPath }'
+      + ' else { $f.GetFile($p).ShortPath }'
+    const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+      encoding: 'utf8',
+      env: { ...process.env, NM_SHORTPATH_IN: p },
+    })
+    const short = (res.stdout ?? '').trim()
+    if (short && !short.includes(' ')) result = short
+  } catch { /* keep original */ }
+  shortPathCache.set(p, result)
+  return result
+}
+
+const quoteIfNeeded = (p: string) => (p.includes(' ') ? `"${p}"` : p)
+
+// Builds the Codex hook command. Two reasons the previous version failed to
+// launch on Windows: (1) the Windows override was written as `command_windows`
+// (snake_case), which Codex ignores — the field is `commandWindows`; (2) Codex
+// spawns the command directly (no shell) and does not reliably honor quotes
+// around a program path containing spaces, so `"C:\Program Files\nodejs\
+// node.exe" …` never started and Codex reported the hook as failed. The Windows
+// command uses 8.3 short paths (space-free) so it tokenizes unambiguously; the
+// runtime dir is shortened once and the (space-free) script filename appended.
+// The script path points at the stable hook-runtime copy (see copyHookRuntime())
+// rather than THIS_DIR — under npx, THIS_DIR resolves inside the npx cache,
+// which can later be wiped, breaking the hook with "Cannot find module".
 function hookCommand(scriptFile: string): CodexHookDef {
-  const nodeBin     = process.execPath
-  const scriptPath  = join(hookRuntimeDir(), 'hooks', scriptFile)
-  const commandLine = `"${nodeBin}" "${scriptPath}"`
+  const nodeBin    = process.execPath
+  const hooksDir   = join(hookRuntimeDir(), 'hooks')
+  const scriptPath = join(hooksDir, scriptFile)
+  const posix      = `"${nodeBin}" "${scriptPath}"`
+  const winNode    = quoteIfNeeded(windowsShortPath(nodeBin))
+  const winScript  = quoteIfNeeded(join(windowsShortPath(hooksDir), scriptFile))
   return {
     type: 'command',
-    command: commandLine,
-    command_windows: commandLine,
+    command: posix,
+    commandWindows: `${winNode} ${winScript}`,
     timeout: 15,
   }
 }
