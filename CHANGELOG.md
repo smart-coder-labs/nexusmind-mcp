@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.0
+
+### Added
+
+- **Team Tasks — agent pull tools.** 13 new MCP tools as thin permissioned
+  wrappers over the backend task API: `list_my_tasks`, `list_tasks`,
+  `get_task`, `create_task`, `update_task`, `delete_task` (confirm-guarded,
+  same pattern as `delete_memory`), `assign_task`, `add_task_comment`,
+  `add_task_label`, `link_task_spec`, `resolve_tasks_for_spec`,
+  `list_sprints`, `create_sprint`. Every tool inherits the caller's existing
+  `task:*` permission grants server-side — no client-side authority is added.
+  `list_my_tasks` resolves "me" from the caller's `NEXUSMIND_API_KEY`
+  server-side; it never accepts a user id argument.
+- **`create_sprint_retrospective` repurposed** to persist a real
+  `SprintRetrospective` via `POST /v1/sprints/:id/retrospectives` instead of
+  its previous behavior (aggregating recent memories client-side into a
+  formatted markdown summary, persisting nothing). The tool name and general
+  purpose are unchanged; the input/output shape changed to `sprint_id` +
+  retro fields. `generate_daily_standup` is untouched.
+
 ## 0.6.2
 
 ### Fixed
