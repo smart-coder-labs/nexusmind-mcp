@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.8.2
+
+### Fixed
+
+- **Codex hooks now spawn on Windows.** The generated `hooks.json` wrote the
+  Windows command override as `command_windows` (snake_case); Codex's schema is
+  camelCase (`commandWindows`), so it was ignored and Codex fell back to
+  `command`, which it spawns directly (no shell) and could not parse because the
+  node path contains a space (`C:\Program Files\nodejs\node.exe`). The hook
+  process never started and Codex reported every hook as "Failed" with no way to
+  approve it. `hookCommand` now emits `commandWindows` using 8.3 short paths
+  (`C:\PROGRA~1\…`) for both the node binary and the hook-runtime dir, so the
+  command tokenizes with no spaces or quotes. Upgrading changes each hook's
+  hash, so Codex requires re-approval via `/hooks` once.
+
+## 0.8.1
+
+### Added
+
+- **`doctor` command** — `npx @smart-coder-labs/nexusmind-mcp doctor` diagnoses
+  the common Windows failures: it prints the API key the current process sees
+  vs. the Windows user registry vs. the Codex `config.toml`, flags stale or
+  mismatched values, verifies the server can be launched via npx, and
+  live-validates the key against the backend.
+- **npx cache self-heal.** A corrupted npx cache made `npx -y <pkg>@latest` fail
+  to resolve the server bin (`'nexusmind-mcp' is not recognized`), which clients
+  surfaced only as an opaque MCP "connection closed: initialize response".
+  `setup` and `doctor` now probe the launch (via a new instant `smoke`
+  subcommand) and clear the npx cache automatically when it is broken.
+
+### Fixed
+
+- **Live credential + env checks in `setup`.** Setup now validates the entered
+  key against the backend and warns when a different `NEXUSMIND_API_KEY` is
+  already active in the environment (a stale value that `setx` cannot update in
+  already-running clients — restart required).
+
 ## 0.8.0
 
 ### Added

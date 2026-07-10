@@ -314,3 +314,7 @@ NEXUSMIND_API_KEY=nm_your_key NEXUSMIND_BASE_URL=http://localhost:8080 npx @smar
 | `NEXUSMIND_BASE_URL is not set` | Re-run setup or add the env var to your mcp.json manually |
 | `NexusMind backend not reachable` | Check that your NexusMind backend is running |
 | `Invalid API key` | Verify the key in your admin panel → Users → rotate if needed |
+| Anything broken on Windows | Run `npx @smart-coder-labs/nexusmind-mcp doctor` — it diagnoses stale env vars, a corrupted npx cache, and an invalid/mismatched key, and self-heals the npx cache |
+| Codex: `connection closed: initialize response` | Corrupted npx cache. `doctor` (or re-running `setup`) clears it automatically; otherwise `npm cache clean --force`. Then restart Codex |
+| Codex hooks show "Failed" / no approve option (Windows) | Upgrade to ≥0.8.2 and re-run `setup`, then run `/hooks` in Codex and approve the NexusMind hooks (the fix changes their hash, so re-approval is required once) |
+| `Invalid API key` right after changing the key (Windows) | `setx` doesn't update already-running programs. Fully quit and reopen the client from the Start menu — not from an existing terminal |
