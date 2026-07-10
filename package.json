@@ -1,6 +1,6 @@
 {
   "name": "@smart-coder-labs/nexusmind-mcp",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "NexusMind MCP server for Claude Code and Cursor — team memory that persists across sessions",
   "type": "module",
   "bin": {
