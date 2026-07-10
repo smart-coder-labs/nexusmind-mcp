@@ -1080,3 +1080,315 @@ export async function exportMemories(input: ExportMemoriesInput = {}): Promise<s
 
   return res.text()
 }
+
+// ── Harnesses (read-only, Phase 1) ───────────────────────────────────────────
+//
+// These are thin, permissioned wrappers over already-shipped backend harness
+// endpoints. The MCP layer adds no new authority: `harness:read` is enforced
+// backend-side on the Bearer token, and a missing permission surfaces here as
+// a normal `request<T>()` error (see the 401/`!res.ok` branches above), which
+// the calling tool renders as `isError: true` — no client-side permission
+// logic lives in this file.
+//
+// `getHarnessVersion` hits the *preview* endpoint, which returns the manifest
+// for display without requiring a prior `approve_install` — see design.md
+// §1 step 1 (`version_manifest_is_readable_for_preview_without_approval`).
+// It is metadata/preview-only: callers must not treat its response as an
+// authorization to write files (that requires the separate approval-gated
+// `downloadHarnessVersion` + `approve_install` flow, out of scope for Phase 1).
+
+export type HarnessFormat =
+  | 'agent' | 'skill' | 'command' | 'hook'
+  | 'output_style' | 'claude_code_plugin' | 'theme'
+
+export type HarnessTarget = 'claude' | 'codex' | 'cursor'
+
+export interface HarnessWarningMetadata {
+  executable?: boolean
+  requires_approval?: boolean
+  [key: string]: unknown
+}
+
+export interface Harness {
+  id: string
+  slug: string
+  name: string
+  description?: string | null
+  owner_user_id?: string
+  project_id?: string | null
+  visibility?: string
+  latest_version?: string
+  targets?: HarnessTarget[]
+  format?: HarnessFormat
+  created_at?: string
+  updated_at?: string
+  [key: string]: unknown
+}
+
+export interface HarnessRecommendation {
+  harness_id: string
+  version: string
+  name: string
+  targets: HarnessTarget[]
+  format: HarnessFormat
+  approval_required?: boolean
+  warning_metadata?: HarnessWarningMetadata
+  [key: string]: unknown
+}
+
+export interface HarnessManifestComponentSummary {
+  path?: string
+  kind?: string
+  media_type?: string
+  size_bytes?: number
+  sha256?: string
+  executable?: boolean
+  [key: string]: unknown
+}
+
+export interface HarnessVersion {
+  harness_id: string
+  version: string
+  schema_version?: string
+  format: HarnessFormat
+  targets: HarnessTarget[]
+  manifest_hash: string
+  components?: HarnessManifestComponentSummary[]
+  security?: { requires_approval?: boolean; executable?: boolean; secret_scan_status?: string; [key: string]: unknown }
+  provenance?: { source?: string; [key: string]: unknown }
+  created_at?: string
+  [key: string]: unknown
+}
+
+export interface HarnessConfigReview {
+  id: string
+  source_tool: HarnessTarget
+  status: string
+  redacted_config?: unknown
+  redaction_report?: unknown
+  content_hash?: string
+  created_at?: string
+  [key: string]: unknown
+}
+
+export interface ListHarnessesInput {
+  target?: HarnessTarget
+  owner_user_id?: string
+}
+
+export function listHarnesses(input: ListHarnessesInput = {}): Promise<Harness[]> {
+  const qs = new URLSearchParams()
+  if (input.target)        qs.set('target',        input.target)
+  if (input.owner_user_id) qs.set('owner_user_id', input.owner_user_id)
+  const query = qs.toString()
+  return request<Harness[]>(query ? `/v1/harnesses?${query}` : '/v1/harnesses')
+}
+
+export interface RecommendHarnessesInput {
+  target?: HarnessTarget
+}
+
+export function recommendHarnesses(input: RecommendHarnessesInput = {}): Promise<HarnessRecommendation[]> {
+  const qs = new URLSearchParams()
+  if (input.target) qs.set('target', input.target)
+  const query = qs.toString()
+  return request<HarnessRecommendation[]>(query ? `/v1/harness-recommendations?${query}` : '/v1/harness-recommendations')
+}
+
+export function getHarnessVersion(harnessId: string, version: string): Promise<HarnessVersion> {
+  return request<HarnessVersion>(
+    `/v1/harnesses/${encodeURIComponent(harnessId)}/versions/${encodeURIComponent(version)}`,
+  )
+}
+
+export interface ListHarnessConfigReviewsInput {
+  status?: string
+}
+
+export function listHarnessConfigReviews(input: ListHarnessConfigReviewsInput = {}): Promise<HarnessConfigReview[]> {
+  const qs = new URLSearchParams()
+  if (input.status) qs.set('status', input.status)
+  const query = qs.toString()
+  return request<HarnessConfigReview[]>(query ? `/v1/harness-config-reviews?${query}` : '/v1/harness-config-reviews')
+}
+
+// ── Harnesses (install core, Phase 2) ────────────────────────────────────────
+//
+// `downloadHarnessVersion` is the approval-gated read: unlike `getHarnessVersion`
+// (preview, always readable), the backend requires a persisted `approve_install`
+// before this succeeds. `approveHarnessInstall` records that approval keyed on
+// `manifest_hash` (and warning acknowledgement for executable formats).
+// `recordHarnessInstallResult` reports the outcome after materialization —
+// never raw file contents, only status + metadata (design.md §1, §4).
+
+export type HarnessTargetScope = 'user' | 'project'
+
+export interface HarnessManifestComponent {
+  path: string
+  kind: string
+  media_type?: string
+  size_bytes: number
+  sha256: string
+  content?: string
+  executable?: boolean
+  entries?: HarnessManifestComponent[]
+  [key: string]: unknown
+}
+
+export interface HarnessManifest {
+  schema_version: string
+  format: HarnessFormat
+  targets: HarnessTarget[]
+  components: HarnessManifestComponent[]
+  provenance?: { source?: string; [key: string]: unknown }
+  security?: { requires_approval?: boolean; executable?: boolean; secret_scan_status?: string; [key: string]: unknown }
+  [key: string]: unknown
+}
+
+export interface HarnessDownloadResponse {
+  harness_id: string
+  version: string
+  manifest: HarnessManifest
+  manifest_hash: string
+  approval_required?: boolean
+  [key: string]: unknown
+}
+
+export function downloadHarnessVersion(harnessId: string, version: string): Promise<HarnessDownloadResponse> {
+  return request<HarnessDownloadResponse>(
+    `/v1/harnesses/${encodeURIComponent(harnessId)}/versions/${encodeURIComponent(version)}/download`,
+  )
+}
+
+export interface HarnessApproval {
+  approval_id: string
+  harness_id: string
+  version: string
+  manifest_hash: string
+  target_tool?: HarnessTarget
+  target_scope?: HarnessTargetScope
+  status?: string
+  created_at?: string
+  [key: string]: unknown
+}
+
+export interface ApproveHarnessInstallInput {
+  target_tool: HarnessTarget
+  target_scope: HarnessTargetScope
+  manifest_hash: string
+  metadata?: Record<string, unknown>
+}
+
+export function approveHarnessInstall(
+  harnessId: string,
+  version: string,
+  input: ApproveHarnessInstallInput,
+): Promise<HarnessApproval> {
+  return request<HarnessApproval>(
+    `/v1/harnesses/${encodeURIComponent(harnessId)}/versions/${encodeURIComponent(version)}/approval`,
+    { method: 'POST', body: JSON.stringify(input) },
+  )
+}
+
+export type HarnessInstallResultStatus = 'installed' | 'failed'
+
+export interface RecordHarnessInstallResultInput {
+  approval_id: string
+  manifest_hash: string
+  status: HarnessInstallResultStatus
+  metadata?: Record<string, unknown>
+}
+
+export function recordHarnessInstallResult(
+  harnessId: string,
+  version: string,
+  input: RecordHarnessInstallResultInput,
+): Promise<HarnessApproval> {
+  return request<HarnessApproval>(
+    `/v1/harnesses/${encodeURIComponent(harnessId)}/versions/${encodeURIComponent(version)}/install-result`,
+    { method: 'POST', body: JSON.stringify(input) },
+  )
+}
+
+// ── Harnesses (create/upload, Phase 3) ───────────────────────────────────────
+//
+// Thin, permissioned wrappers over already-shipped backend endpoints,
+// gated by `harness:write` — a missing permission surfaces as a normal
+// `request<T>()` error (403), same pattern as the Phase 1/2 harness
+// methods above. No client-side authority is added here: the manifest
+// passed to `publishHarnessVersion` must already be built locally by
+// `build_harness_manifest_from_path` (secret-scanned, sha256-hashed,
+// inline-limited); this client method does not re-run that logic, it only
+// transports the already-validated manifest (design.md §4).
+
+export interface CreateHarnessRequest {
+  slug: string
+  name: string
+  description?: string
+  project_id?: string
+  visibility?: string
+  owner_user_id?: string
+}
+
+export interface CreateHarnessResponse {
+  id: string
+  slug: string
+  owner_user_id?: string
+  [key: string]: unknown
+}
+
+export function createHarness(input: CreateHarnessRequest): Promise<CreateHarnessResponse> {
+  const body: Record<string, unknown> = { slug: input.slug, name: input.name }
+  if (input.description !== undefined)   body.description   = input.description
+  if (input.project_id !== undefined)    body.project_id    = input.project_id
+  if (input.visibility !== undefined)    body.visibility    = input.visibility
+  if (input.owner_user_id !== undefined) body.owner_user_id = input.owner_user_id
+  return request<CreateHarnessResponse>('/v1/harnesses', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export interface PublishHarnessVersionInput {
+  version: string
+  manifest: Record<string, unknown>
+  manifest_hash?: string
+}
+
+export function publishHarnessVersion(
+  harnessId: string,
+  input: PublishHarnessVersionInput,
+): Promise<HarnessVersion> {
+  const body: Record<string, unknown> = { version: input.version, manifest: input.manifest }
+  if (input.manifest_hash !== undefined) body.manifest_hash = input.manifest_hash
+  return request<HarnessVersion>(
+    `/v1/harnesses/${encodeURIComponent(harnessId)}/versions`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+}
+
+// ── Harness config review upload (Phase 4, optional) ────────────────────────
+//
+// The local redaction/preview MUST happen before this call (harness-config-review
+// spec: "Agent-session config review requires local preview before upload").
+// This method only transports the already-redacted snapshot; it performs no
+// redaction itself. The backend still enforces raw-content rejection
+// independently as a second gate.
+
+export interface CreateHarnessConfigReviewInput {
+  source_tool: HarnessTarget
+  redacted_config: unknown
+  redaction_report: unknown
+  content_hash: string
+  status?: string
+}
+
+export function createHarnessConfigReview(
+  input: CreateHarnessConfigReviewInput,
+): Promise<HarnessConfigReview> {
+  const body: Record<string, unknown> = {
+    source_tool: input.source_tool,
+    redacted_config: input.redacted_config,
+    redaction_report: input.redaction_report,
+    content_hash: input.content_hash,
+  }
+  if (input.status !== undefined) body.status = input.status
+  return request<HarnessConfigReview>('/v1/harness-config-reviews', { method: 'POST', body: JSON.stringify(body) })
+}
