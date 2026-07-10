@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import * as readline from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
 import { spawnSync } from 'node:child_process'
+import { verifyCredentials, maskKey } from './verify.js'
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -556,6 +557,39 @@ export async function main() {
   if (doCodex) {
     log(`${c.bold}Setting up Codex CLI…${c.reset}`)
     installCodex(apiKey, baseUrl)
+    log('')
+  }
+
+  // Verify the key we just configured actually works — turns a silent
+  // "Invalid API key" failure later (inside the client) into immediate,
+  // actionable feedback here.
+  if (apiKey) {
+    log(`${c.bold}Verifying credentials…${c.reset}`)
+    const result = await verifyCredentials(apiKey, baseUrl)
+    if (result.ok) {
+      success(`API key is valid against ${baseUrl}`)
+    } else if (result.reason === 'unauthorized') {
+      error(`The configured API key was rejected by ${baseUrl} (HTTP 401).`)
+      log('  Double-check the key you entered — it does not match any key on the backend.')
+    } else if (result.reason === 'unreachable') {
+      warn(`Could not reach ${baseUrl} to verify the key — check the backend URL / your network.`)
+    } else {
+      warn(`Could not verify the key: ${result.message}`)
+    }
+    log('')
+  }
+
+  // Stale-env guard (Windows especially): setx / rc-file edits only affect
+  // processes started AFTER setup runs. If a DIFFERENT key was already live in
+  // this environment, every already-open client (Codex, Cursor, Claude) is
+  // still holding it and will keep sending the OLD key until fully restarted —
+  // which surfaces as "Invalid API key" even though config on disk is correct.
+  if (envKey && apiKey && envKey !== apiKey) {
+    warn(`A different NEXUSMIND_API_KEY (${maskKey(envKey)}) is already active in this environment.`)
+    log(`  The new key is ${maskKey(apiKey)}. Windows does not update programs that are already running.`)
+    log(`  ${c.bold}Fully quit Codex/Cursor/Claude and reopen them from the Start menu${c.reset} (not from an`)
+    log('  existing terminal) so they pick up the new key. Run `npx @smart-coder-labs/nexusmind-mcp doctor`')
+    log('  after restarting to confirm.')
     log('')
   }
 
