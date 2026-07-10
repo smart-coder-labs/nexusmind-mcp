@@ -14,8 +14,13 @@ if (process.argv[2] === 'sync-agents') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject } from './client.js'
-import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview } from './client.js'
+import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget } from './client.js'
+import { planInstall } from './harness/plan.js'
+import { applyPlan } from './harness/materialize.js'
+import { resolveDestinationRoot } from './harness/resolver.js'
+import { buildManifestFromPath } from './harness/build-manifest.js'
+import { redactConfigForReview } from './harness/config-review.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -3462,6 +3467,473 @@ server.tool(
       await reindexProject(input.project_id)
       return {
         content: [{ type: 'text', text: `Reindex triggered for project ${input.project_id}` }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ── Harnesses (read-only, Phase 1) ───────────────────────────────────────────
+//
+// Thin permissioned wrappers over already-shipped backend harness endpoints.
+// `harness:read` is enforced backend-side on the Bearer token; these tools add
+// no client-side authority and never fetch manifest content/downloads — only
+// metadata and (for get_harness_version) a preview summary.
+
+const harnessTargetEnum = z.enum(['claude', 'codex', 'cursor'])
+
+function formatHarness(h: Harness): string {
+  const targets = h.targets && h.targets.length > 0 ? ` [${h.targets.join(', ')}]` : ''
+  const owner = h.owner_user_id ? ` (owner: ${h.owner_user_id})` : ''
+  const version = h.latest_version ? ` v${h.latest_version}` : ''
+  return `• ${h.slug}${version} — ${h.name}${targets}${owner} (id: ${h.id})`
+}
+
+function formatHarnessRecommendation(r: HarnessRecommendation): string {
+  const approval = r.approval_required ? ' [requires approval]' : ''
+  const warning = r.warning_metadata?.executable ? ' [executable]' : ''
+  return `• ${r.harness_id} v${r.version} — ${r.name} [${r.format}] targets: ${r.targets.join(', ')}${approval}${warning}`
+}
+
+function formatHarnessVersion(v: HarnessVersion): string {
+  const componentCount = v.components?.length ?? 0
+  const lines = [
+    `Harness ${v.harness_id} version ${v.version}`,
+    `Format: ${v.format}`,
+    `Targets: ${v.targets.join(', ')}`,
+    `Manifest hash: ${v.manifest_hash}`,
+    `Components: ${componentCount}`,
+  ]
+  if (v.security?.executable) lines.push('Warning: contains an executable component')
+  if (v.security?.requires_approval) lines.push('Requires approval before install')
+  return lines.join('\n')
+}
+
+function formatHarnessConfigReview(r: HarnessConfigReview): string {
+  return `• ${r.id} — source: ${r.source_tool}, status: ${r.status}${r.created_at ? ` (${new Date(r.created_at).toLocaleDateString()})` : ''}`
+}
+
+// recommend_harnesses
+server.tool(
+  'recommend_harnesses',
+  'List recommended harnesses for a given agent target (claude, codex, cursor). Returns metadata only (id, version, name, targets, format, approval/warning flags) — never downloads or returns manifest content.',
+  {
+    target: harnessTargetEnum.optional().describe('Filter recommendations to a specific tool target'),
+  },
+  async ({ target }) => {
+    try {
+      const recommendations = await recommendHarnesses({ target })
+      if (recommendations.length === 0) {
+        return { content: [{ type: 'text', text: 'No harness recommendations found.' }] }
+      }
+      const text = recommendations.map(formatHarnessRecommendation).join('\n')
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// list_harnesses
+server.tool(
+  'list_harnesses',
+  'List harnesses visible to the caller, optionally filtered by target tool or owner. Returns catalog metadata only — no manifest content.',
+  {
+    target:        harnessTargetEnum.optional().describe('Filter by tool target'),
+    owner_user_id: z.string().optional().describe('Filter by owner user ID'),
+  },
+  async ({ target, owner_user_id }) => {
+    try {
+      const harnesses = await listHarnesses({ target, owner_user_id })
+      if (harnesses.length === 0) {
+        return { content: [{ type: 'text', text: 'No harnesses found.' }] }
+      }
+      const text = harnesses.map(formatHarness).join('\n')
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// get_harness_version
+server.tool(
+  'get_harness_version',
+  'Preview a specific harness version: format, targets, manifest hash, and component summary. Uses the preview endpoint — readable without a prior install approval. Does not write any local file and does not expose raw component content.',
+  {
+    harness_id: z.string().describe('Harness ID'),
+    version:    z.string().describe('Version string, e.g. "1.0.0"'),
+  },
+  async ({ harness_id, version }) => {
+    try {
+      const harnessVersion = await getHarnessVersion(harness_id, version)
+      return { content: [{ type: 'text', text: formatHarnessVersion(harnessVersion) }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// list_harness_config_reviews
+server.tool(
+  'list_harness_config_reviews',
+  'List shared harness config reviews (redacted snapshots only), optionally filtered by status. Requires harness:read; denied calls return no config review data.',
+  {
+    status: z.string().optional().describe('Filter by review status (e.g. "pending", "approved")'),
+  },
+  async ({ status }) => {
+    try {
+      const reviews = await listHarnessConfigReviews({ status })
+      if (reviews.length === 0) {
+        return { content: [{ type: 'text', text: 'No harness config reviews found.' }] }
+      }
+      const text = reviews.map(formatHarnessConfigReview).join('\n')
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ── Harness install core (Phase 2) ───────────────────────────────────────────
+//
+// Two-phase installer (design.md §1): `plan_harness_install` computes a diff
+// and writes NOTHING (it only ever imports `harness/plan.js`, which never
+// imports the materializer). `apply_harness_install` is the single path that
+// writes to disk, and only after: (1) a `manifest_hash` from a prior plan the
+// user reviewed, (2) a fresh backend approval keyed on that hash, and (3) a
+// hash-drift check that re-refuses if the manifest changed between plan and
+// apply. Neither tool grants authority beyond the backend's `harness:*`
+// permissions — every write still requires the backend-persisted approval.
+
+const harnessScopeEnum = z.enum(['user', 'project'])
+
+// apply_harness_install tool output shapes (design.md §1 "apply_harness_install" Output).
+interface AppliedWritten { destination: string; action: 'create' | 'overwrite'; size_bytes: number }
+interface AppliedSkipped { destination: string; reason: 'unchanged' }
+interface AppliedError { destination: string; message: string }
+
+// plan_harness_install
+server.tool(
+  'plan_harness_install',
+  'Plan installing a harness version for a given agent tool (claude, codex, cursor) and scope (user, project). Downloads the manifest preview, resolves per-tool destinations, and returns a full diff (create/overwrite/skip per file) plus executable warnings. Writes NOTHING to disk — this is a read-only preview for the user to review before apply_harness_install.',
+  {
+    harness_id:   z.string().describe('Harness ID'),
+    version:      z.string().describe('Version string, e.g. "1.0.0"'),
+    target_tool:  harnessTargetEnum.describe('Agent tool to plan the install for'),
+    target_scope: harnessScopeEnum.default('project').describe('Install scope: "user" (tool home dir) or "project" (repo-local dir under cwd)'),
+  },
+  async ({ harness_id, version, target_tool, target_scope }) => {
+    try {
+      const preview = await getHarnessVersion(harness_id, version)
+      const manifest = (preview as any).manifest ?? preview
+      const manifestHash = preview.manifest_hash
+
+      const planResult = await planInstall(manifest, target_tool, target_scope, { projectRoot: process.cwd() })
+
+      const output = {
+        harness_id,
+        version,
+        target_tool,
+        target_scope,
+        manifest_hash: manifestHash,
+        format: planResult.format,
+        requires_acknowledgement: planResult.requires_acknowledgement,
+        warnings: planResult.warnings,
+        diff: planResult.diff.map(d => ({
+          destination: d.destination,
+          relative_path: d.relative_path,
+          action: d.action,
+          sha256: d.sha256,
+          existing_sha256: d.existing_sha256,
+          size_bytes: d.size_bytes,
+          executable: d.executable,
+          warning: d.warning,
+        })),
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// apply_harness_install
+server.tool(
+  'apply_harness_install',
+  'Apply a previously planned harness install. Requires the manifest_hash returned by plan_harness_install as explicit confirmation of a reviewed diff. Records approve_install (refusing executable hook/plugin manifests without warning_acknowledged), re-downloads the manifest and aborts with hash_mismatch if it drifted since planning, materializes files to their resolved destinations, and calls record_install_result. Never writes without a prior plan_harness_install manifest_hash.',
+  {
+    harness_id:            z.string().describe('Harness ID'),
+    version:               z.string().describe('Version string, e.g. "1.0.0"'),
+    target_tool:           harnessTargetEnum.describe('Agent tool to install for'),
+    target_scope:          harnessScopeEnum.default('project').describe('Install scope: "user" or "project"'),
+    manifest_hash:         z.string().describe('manifest_hash from a prior plan_harness_install call — required confirmation that the user reviewed that diff'),
+    warning_acknowledged:  z.boolean().optional().describe('Required when the plan reported requires_acknowledgement: true (hook / claude_code_plugin formats)'),
+    overwrite_confirmed:   z.boolean().optional().describe('Required when any diff entry action is "overwrite"'),
+  },
+  async ({ harness_id, version, target_tool, target_scope, manifest_hash, warning_acknowledged, overwrite_confirmed }) => {
+    try {
+      // Step 1: record approve_install with the manifest hash from plan (+ ack metadata).
+      // The backend rejects executable formats without warning_acknowledged=true.
+      const approval = await approveHarnessInstall(harness_id, version, {
+        target_tool,
+        target_scope,
+        manifest_hash,
+        metadata: { warning_acknowledged: warning_acknowledged === true, overwrite_confirmed: overwrite_confirmed === true },
+      })
+
+      // Step 2: the approval-gated download now succeeds; it returns the manifest + a
+      // freshly computed manifest_hash.
+      const download = await downloadHarnessVersion(harness_id, version)
+
+      // Step 3: hash-mismatch / re-approval gate — if the manifest drifted between plan
+      // and apply, abort the write entirely and instruct the caller to re-plan.
+      if (download.manifest_hash !== manifest_hash) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              approval_id: approval.approval_id,
+              manifest_hash: download.manifest_hash,
+              result_status: 'hash_mismatch',
+              written: [],
+              skipped: [],
+              errors: [{
+                destination: '',
+                message: `manifest_hash drifted since plan (planned "${manifest_hash}", now "${download.manifest_hash}") — re-run plan_harness_install and re-confirm before retrying`,
+              }],
+            }, null, 2),
+          }],
+        }
+      }
+
+      // Step 4: materialize files via the ONLY write module in this feature.
+      const projectRoot = process.cwd()
+      const planResult = await planInstall(download.manifest, target_tool, target_scope, { projectRoot })
+
+      // Step 4a: overwrite gate — refuse the WHOLE apply (no writes at all,
+      // not even co-occurring "create" entries) when any diff entry would
+      // overwrite an existing file and the caller has not passed
+      // overwrite_confirmed: true. This is additional to (does not replace)
+      // the warning_acknowledged gate above and the hash-mismatch gate.
+      const hasOverwrite = planResult.diff.some(d => d.action === 'overwrite')
+      if (hasOverwrite && overwrite_confirmed !== true) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              approval_id: approval.approval_id,
+              manifest_hash: download.manifest_hash,
+              result_status: 'overwrite_not_confirmed',
+              written: [],
+              skipped: [],
+              errors: [{
+                destination: '',
+                message: 'this install would overwrite one or more existing files — re-run apply_harness_install with overwrite_confirmed: true to proceed',
+              }],
+            }, null, 2),
+          }],
+        }
+      }
+
+      const root = resolveDestinationRoot(target_tool, target_scope, projectRoot)
+      const applyResult = await applyPlan(planResult.diff, { root })
+
+      const resultStatus: 'installed' | 'failed' = applyResult.errors.length > 0 ? 'failed' : 'installed'
+
+      // Step 5: record the outcome — never raw file contents, only status + metadata.
+      await recordHarnessInstallResult(harness_id, version, {
+        approval_id: approval.approval_id,
+        manifest_hash: download.manifest_hash,
+        status: resultStatus,
+        metadata: { changed_files_count: applyResult.written.length },
+      })
+
+      const written: AppliedWritten[] = applyResult.written
+      const skipped: AppliedSkipped[] = applyResult.skipped
+      const errors: AppliedError[] = applyResult.errors
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            approval_id: approval.approval_id,
+            manifest_hash: download.manifest_hash,
+            result_status: resultStatus,
+            written,
+            skipped,
+            errors: errors.length > 0 ? errors : undefined,
+          }, null, 2),
+        }],
+        isError: resultStatus === 'failed',
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ── Harness create/upload (Phase 3) ──────────────────────────────────────────
+//
+// build_harness_manifest_from_path reads local files, sha256-hashes and
+// inlines content (<=64KiB per component), runs the local secret scanner,
+// and REFUSES on any hit — no manifest is returned, and the refusal message
+// never contains a matched secret value (design.md §6). create_harness and
+// publish_harness_version are thin wrappers over the corresponding
+// harness:write-gated backend endpoints; they add no client-side authority.
+
+const harnessFormatEnum = z.enum([
+  'agent', 'skill', 'command', 'hook', 'output_style', 'claude_code_plugin', 'theme',
+])
+
+// build_harness_manifest_from_path
+server.tool(
+  'build_harness_manifest_from_path',
+  'Build a schema-1.1 harness manifest from local files at the given path. Computes sha256 + size per component, inlines content up to 64KiB per component (refuses larger files, never truncates), and runs a local secret scan that REFUSES the entire build on any hit (never inlines or hashes offending content). Does not upload anything — pass the returned manifest to publish_harness_version.',
+  {
+    path:    z.string().describe('Local file or directory path to package'),
+    format:  harnessFormatEnum.describe('Harness format template to assemble the manifest against'),
+    targets: z.array(harnessTargetEnum).min(1).describe('Agent tools this harness targets (claude, codex, cursor)'),
+    source:  z.string().describe('Provenance source label recorded in manifest.provenance.source'),
+  },
+  async ({ path, format, targets, source }) => {
+    try {
+      const result = await buildManifestFromPath(path, format as HarnessFormat, targets as HarnessTarget[], source)
+      if (result.refused) {
+        return {
+          content: [{ type: 'text', text: `Refused: ${result.reason}` }],
+          isError: true,
+        }
+      }
+      const manifest = result.manifest!
+      const output = {
+        manifest,
+        secret_scan_status: 'passed' as const,
+        component_count: manifest.components.length,
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// create_harness
+server.tool(
+  'create_harness',
+  'Create a new harness. Thin wrapper over the harness:write-gated backend endpoint — adds no authority beyond that permission.',
+  {
+    slug:          z.string().describe('Unique harness slug'),
+    name:          z.string().describe('Display name'),
+    description:   z.string().optional().describe('Optional description'),
+    project_id:    z.string().optional().describe('Optional project ID to associate the harness with'),
+    visibility:    z.string().optional().describe('Optional visibility setting (e.g. "org", "private")'),
+    owner_user_id: z.string().optional().describe('Optional owner user ID'),
+  },
+  async ({ slug, name, description, project_id, visibility, owner_user_id }) => {
+    try {
+      const harness = await createHarness({ slug, name, description, project_id, visibility, owner_user_id })
+      return { content: [{ type: 'text', text: JSON.stringify(harness, null, 2) }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// publish_harness_version
+server.tool(
+  'publish_harness_version',
+  'Publish an immutable harness version from a manifest (typically produced by build_harness_manifest_from_path). Thin wrapper over the harness:write-gated backend endpoint — adds no authority beyond that permission.',
+  {
+    harness_id:    z.string().describe('Harness ID to publish a version under'),
+    version:       z.string().describe('Version string, e.g. "1.0.0"'),
+    manifest:      z.record(z.any()).describe('Schema-1.1 manifest object, e.g. from build_harness_manifest_from_path'),
+    manifest_hash: z.string().optional().describe('Optional pre-computed manifest hash'),
+  },
+  async ({ harness_id, version, manifest, manifest_hash }) => {
+    try {
+      const published = await publishHarnessVersion(harness_id, { version, manifest, manifest_hash })
+      return { content: [{ type: 'text', text: JSON.stringify(published, null, 2) }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ── Harness config review (Phase 4, optional) ────────────────────────────────
+//
+// create_harness_config_review performs LOCAL redaction of the config at
+// config_path (reusing harness/secret-scan.ts categories) BEFORE uploading —
+// the redaction and preview MUST happen locally, per the harness-config-review
+// spec ("Agent-session config review requires local preview before upload").
+// The backend still enforces raw-content rejection independently as a second
+// gate; this tool does not bypass that.
+
+server.tool(
+  'create_harness_config_review',
+  'Create a harness config review from a local config file: redacts secret-shaped values locally (never uploads raw content), then submits the redacted snapshot, redaction report, and content hash for review. Requires harness:write; the backend independently re-enforces raw-content rejection.',
+  {
+    source_tool: harnessTargetEnum.describe('The tool the config snapshot originates from'),
+    config_path: z.string().describe('Local path to the config file to redact and preview'),
+  },
+  async ({ source_tool, config_path }) => {
+    try {
+      const { readFile } = await import('node:fs/promises')
+      const raw = await readFile(config_path, 'utf8')
+      let parsedConfig: unknown
+      try {
+        parsedConfig = JSON.parse(raw)
+      } catch {
+        parsedConfig = raw
+      }
+
+      const { redacted_config, redaction_report, content_hash } = redactConfigForReview(parsedConfig, config_path)
+
+      const review = await createHarnessConfigReview({
+        source_tool,
+        redacted_config,
+        redaction_report,
+        content_hash,
+        status: 'pending',
+      })
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ review, redacted_config, redaction_report, content_hash }, null, 2),
+        }],
       }
     } catch (err) {
       return {
