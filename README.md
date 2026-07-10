@@ -60,6 +60,85 @@ See [CHANGELOG.md](./CHANGELOG.md) for the full tool list and the 0.5.0 migratio
 
 ---
 
+## Harness tools
+
+Harnesses are shareable agent artifacts — agents, skills, commands, hooks, output styles,
+Claude Code plugins, and themes — that can be recommended, installed, or published through
+these 10 tools. All of them are permission-gated backend-side (`harness:read` /
+`harness:write`); the MCP server adds no client-side authority.
+
+### Read / recommend
+
+| Tool | Description |
+|------|-------------|
+| `recommend_harnesses` | List recommended harnesses for a target tool (`claude`, `codex`, `cursor`). Metadata only. |
+| `list_harnesses` | List harnesses visible to the caller, optionally filtered by `target` or `owner_user_id`. Metadata only. |
+| `get_harness_version` | Preview a specific harness version — format, targets, manifest hash, component summary. Read-only, no approval required. |
+| `list_harness_config_reviews` | List shared harness config reviews (redacted snapshots only), optionally filtered by `status`. |
+
+None of these fetch manifest content or component downloads — only catalog metadata and,
+for `get_harness_version`, a preview summary.
+
+### Install — two-phase, approval-first
+
+Installing a harness is split into a **plan** step (read-only, writes nothing) and an
+**apply** step (writes to disk only after explicit confirmation):
+
+1. **`plan_harness_install`** — downloads the manifest preview, resolves the per-tool
+   destinations, and returns a full diff (`create` / `overwrite` / `skip` per file) plus any
+   executable warnings. Nothing is written to disk.
+2. You review the diff.
+3. **`apply_harness_install`** — requires the `manifest_hash` from step 1 as proof the diff
+   was reviewed. It records a backend approval, re-downloads the manifest to check for hash
+   drift, materializes the files, and records the install result.
+
+Two confirmation flags on `apply_harness_install`:
+
+- **`warning_acknowledged`** — required when the plan reported
+  `requires_acknowledgement: true`. This happens for executable formats (`hook`,
+  `claude_code_plugin`); apply refuses to write without it.
+- **`overwrite_confirmed`** — required when any diff entry's `action` is `overwrite` (an
+  existing local file would be replaced). If any entry would overwrite and this flag isn't
+  set, apply refuses the **entire** install with zero writes — not even the non-overwriting
+  entries are written.
+
+`apply_harness_install` returns a `result_status` of one of:
+
+| Status | Meaning |
+|--------|---------|
+| `installed` | Files materialized successfully. |
+| `failed` | One or more components failed to write (see `errors`). |
+| `hash_mismatch` | The manifest changed between plan and apply — nothing was written; re-run `plan_harness_install`. |
+| `overwrite_not_confirmed` | An overwrite would occur and `overwrite_confirmed` wasn't set — nothing was written. |
+
+### Create / upload
+
+| Tool | Description |
+|------|-------------|
+| `build_harness_manifest_from_path` | Reads local files at a path, computes sha256 + size per component, inlines content up to 64KiB per component (refuses larger files, never truncates), and runs a local secret scan that refuses the entire build on any hit — never inlines or hashes offending content. Produces a schema 1.1 manifest. Uploads nothing. |
+| `create_harness` | Create a new harness. Thin wrapper over the `harness:write`-gated backend endpoint. |
+| `publish_harness_version` | Publish an immutable harness version from a manifest (typically from `build_harness_manifest_from_path`). Thin wrapper over the `harness:write`-gated backend endpoint. |
+
+### Config review
+
+| Tool | Description |
+|------|-------------|
+| `create_harness_config_review` | Redacts a local config file's secret-shaped values **locally** first, then submits the redacted snapshot, redaction report, and content hash for review. The backend independently re-enforces raw-content rejection as a second gate. |
+
+### Destinations per tool
+
+| Tool | Default destination |
+|------|----------------------|
+| Claude Code | `~/.claude/` (user scope) or `.claude/` (project scope) |
+| Cursor | `~/.cursor/` (user scope) or `.cursor/` (project scope) |
+| Codex | `~/.codex/` (user scope) or `.codex/` (project scope) — conservative default; Codex only supports markdown-only formats (`agent`, `command`) |
+
+`cursor` is a first-class install/manifest target (it replaced `opencode`). `skill`,
+`output_style`, and `theme` are Claude Code-only formats — installs targeting `codex` or
+`cursor` for those formats are refused with no destination guessed.
+
+---
+
 ## Manual configuration
 
 ### Claude Code
