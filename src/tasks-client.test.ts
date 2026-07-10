@@ -45,7 +45,10 @@ beforeEach(() => {
       status: mockResponse.status,
       statusText: 'Mock Status',
       json: async () => mockResponse.body,
-      text: async () => JSON.stringify(mockResponse.body),
+      // Real fetch's text() always resolves to a string; JSON.stringify(undefined)
+      // is `undefined`, not `"undefined"`, so guard for the no-body case here to
+      // match actual Response semantics.
+      text: async () => mockResponse.body === undefined ? '' : JSON.stringify(mockResponse.body),
     } as Response
   }) as typeof fetch
 })
@@ -205,4 +208,50 @@ test('createSprintRetrospective calls POST /v1/sprints/:id/retrospectives with r
   assert.equal(calls[0].init?.method, 'POST')
   const body = JSON.parse(calls[0].init?.body as string)
   assert.deepEqual(body, { went_well: 'shipped fast' })
+})
+
+// ── Empty-body non-204 responses (live e2e regression) ──────────────────────
+//
+// The backend returns 201 CREATED with an EMPTY body (content-length 0) for
+// POST /v1/tasks/:id/spec-links (and possibly other relationship POSTs). A
+// real fetch Response in that situation throws SyntaxError from res.json()
+// ("Unexpected end of JSON input") because there is no JSON to parse — even
+// though the request succeeded and the link WAS persisted server-side. The
+// shared beforeEach mock above is too lenient (its json() just resolves
+// mockResponse.body, even when that's `undefined`), so it never reproduced
+// this bug. These tests install a raw-fetch stub that mirrors real fetch:
+// json() throws on an empty body, text() returns the actual empty string.
+
+test('linkTaskSpec resolves (does not throw) when the backend returns 201 with an empty body', async () => {
+  globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+    calls.push({ url: String(url), init })
+    return {
+      ok: true,
+      status: 201,
+      statusText: 'Created',
+      json: async () => { throw new SyntaxError('Unexpected end of JSON input') },
+      text: async () => '',
+    } as Response
+  }) as typeof fetch
+
+  const result = await linkTaskSpec('t1', 'team-tasks')
+  assert.equal(result, undefined)
+  assert.equal(calls[0].url, 'http://fake-backend.test/v1/tasks/t1/spec-links')
+})
+
+test('a normal 200 response with a real JSON body still parses correctly', async () => {
+  globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+    calls.push({ url: String(url), init })
+    const text = JSON.stringify(['team-tasks', 'other-spec'])
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => JSON.parse(text),
+      text: async () => text,
+    } as Response
+  }) as typeof fetch
+
+  const result = await listTaskSpecs('t1')
+  assert.deepEqual(result, ['team-tasks', 'other-spec'])
 })

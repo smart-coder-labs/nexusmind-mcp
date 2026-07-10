@@ -43,7 +43,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (res.status === 204) return undefined as T
-  return res.json() as Promise<T>
+
+  // Some relationship POST endpoints (e.g. spec-links) return 201 CREATED
+  // with an empty body (content-length 0). res.json() throws SyntaxError
+  // on an empty body, so read as text first and treat any empty/whitespace
+  // body as no-content regardless of status, instead of special-casing 204.
+  const text = await res.text()
+  if (text.trim() === '') return undefined as T
+  return JSON.parse(text) as T
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
