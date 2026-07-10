@@ -8,6 +8,7 @@ import http from 'node:http'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 
 // Integration tests for the Phase 1 harness read tools (recommend_harnesses,
 // list_harnesses, get_harness_version, list_harness_config_reviews).
@@ -70,10 +71,26 @@ function startFakeBackend(): Promise<FakeBackend> {
   })
 }
 
+interface ElicitResponse {
+  action: 'accept' | 'decline' | 'cancel'
+  content?: Record<string, unknown>
+}
+
 async function withClient(
   backend: FakeBackend,
   fn: (client: Client) => Promise<void>,
-  opts: { cwd?: string } = {},
+  opts: {
+    cwd?: string
+    elicitResponse?: ElicitResponse
+    /**
+     * Advertises the `elicitation` capability but throws when the server
+     * calls elicitInput — simulates a client that lied about support, or
+     * whose elicitation handler errors. Takes precedence over
+     * elicitResponse when both are set (they are mutually exclusive in
+     * practice).
+     */
+    elicitThrows?: boolean
+  } = {},
 ): Promise<void> {
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -84,7 +101,18 @@ async function withClient(
       NEXUSMIND_BASE_URL: `http://127.0.0.1:${backend.port}`,
     },
   })
-  const client = new Client({ name: 'harness-tools-test', version: '1.0.0' })
+  const client = new Client(
+    { name: 'harness-tools-test', version: '1.0.0' },
+    (opts.elicitResponse || opts.elicitThrows) ? { capabilities: { elicitation: {} } } : undefined,
+  )
+  if (opts.elicitThrows) {
+    client.setRequestHandler(ElicitRequestSchema, async () => {
+      throw new Error('simulated elicitation handler failure')
+    })
+  } else if (opts.elicitResponse) {
+    const response = opts.elicitResponse
+    client.setRequestHandler(ElicitRequestSchema, async () => response)
+  }
   await client.connect(transport)
   try {
     await fn(client)
@@ -493,6 +521,270 @@ test('apply_harness_install: overwrite entry WITH overwrite_confirmed proceeds a
         assert.equal(parsed.written.length, 1)
         assert.equal(parsed.written[0].action, 'overwrite')
         assert.equal(readFileSync(join(destDir, 'foo.md'), 'utf8'), 'hello')
+      }, { cwd })
+    } finally {
+      await backend.close()
+    }
+  })
+})
+
+test('apply_harness_install: elicitation ACCEPT overwrites a pre-existing file without overwrite_confirmed', { skip }, async () => {
+  await withTempCwd(async cwd => {
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    const destDir = join(cwd, '.claude', 'agents')
+    mkdirSync(destDir, { recursive: true })
+    writeFileSync(join(destDir, 'foo.md'), 'stale content that differs from the manifest')
+
+    const elicitMessages: string[] = []
+
+    const backend = await startFakeBackend()
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0', 200, agentManifest())
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0/download', 200, agentManifest())
+    backend.setRoute('POST /v1/harnesses/h1/versions/1.0.0/approval', 200, {
+      approval_id: 'appr-1', harness_id: 'h1', version: '1.0.0', manifest_hash: 'sha256:planhash',
+    })
+    backend.setRoute('POST /v1/harnesses/h1/versions/1.0.0/install-result', 200, {
+      approval_id: 'appr-1', harness_id: 'h1', version: '1.0.0', manifest_hash: 'sha256:planhash', status: 'installed',
+    })
+    try {
+      const transport = new StdioClientTransport({
+        command: process.execPath,
+        args: [ENTRY],
+        cwd,
+        env: {
+          NEXUSMIND_API_KEY: 'nm_test_key',
+          NEXUSMIND_BASE_URL: `http://127.0.0.1:${backend.port}`,
+        },
+      })
+      const client = new Client(
+        { name: 'harness-tools-test', version: '1.0.0' },
+        { capabilities: { elicitation: {} } },
+      )
+      client.setRequestHandler(ElicitRequestSchema, async request => {
+        elicitMessages.push(request.params.message)
+        return { action: 'accept', content: { confirm: true } }
+      })
+      await client.connect(transport)
+      try {
+        const result = await client.callTool({
+          name: 'apply_harness_install',
+          arguments: {
+            harness_id: 'h1', version: '1.0.0', target_tool: 'claude', target_scope: 'project',
+            manifest_hash: 'sha256:planhash',
+            // overwrite_confirmed intentionally omitted — elicitation ACCEPT
+            // is what must authorize the overwrite here.
+          },
+        })
+        assert.notEqual(result.isError, true)
+        const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+        assert.equal(parsed.result_status, 'installed')
+        assert.equal(parsed.written.length, 1)
+        assert.equal(parsed.written[0].action, 'overwrite')
+
+        const writtenPath = join(destDir, 'foo.md')
+        assert.equal(readFileSync(writtenPath, 'utf8'), 'hello')
+        assert.notEqual(readFileSync(writtenPath, 'utf8'), 'stale content that differs from the manifest')
+
+        const installResultCall = backend.requestBodies.find(c => c.url === '/v1/harnesses/h1/versions/1.0.0/install-result')
+        assert.ok(installResultCall, 'install result must be recorded after an accepted elicitation overwrite')
+
+        assert.equal(elicitMessages.length, 1)
+        assert.match(elicitMessages[0], /OVERWRITE:/)
+        assert.match(elicitMessages[0], /foo\.md/)
+      } finally {
+        await client.close()
+      }
+    } finally {
+      await backend.close()
+    }
+  })
+})
+
+test('apply_harness_install: elicitation ACCEPT confirms the install and writes the file', { skip }, async () => {
+  await withTempCwd(async cwd => {
+    const backend = await startFakeBackend()
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0', 200, agentManifest())
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0/download', 200, agentManifest())
+    backend.setRoute('POST /v1/harnesses/h1/versions/1.0.0/approval', 200, {
+      approval_id: 'appr-1', harness_id: 'h1', version: '1.0.0', manifest_hash: 'sha256:planhash',
+    })
+    backend.setRoute('POST /v1/harnesses/h1/versions/1.0.0/install-result', 200, {
+      approval_id: 'appr-1', harness_id: 'h1', version: '1.0.0', manifest_hash: 'sha256:planhash', status: 'installed',
+    })
+    try {
+      await withClient(backend, async client => {
+        const result = await client.callTool({
+          name: 'apply_harness_install',
+          arguments: {
+            harness_id: 'h1', version: '1.0.0', target_tool: 'claude', target_scope: 'project',
+            manifest_hash: 'sha256:planhash',
+            // overwrite_confirmed/warning_acknowledged intentionally omitted —
+            // elicitation ACCEPT is the confirmation.
+          },
+        })
+        assert.notEqual(result.isError, true)
+        const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+        assert.equal(parsed.result_status, 'installed')
+        assert.equal(parsed.written.length, 1)
+
+        const writtenPath = join(cwd, '.claude', 'agents', 'foo.md')
+        assert.equal(existsSync(writtenPath), true)
+        assert.equal(readFileSync(writtenPath, 'utf8'), 'hello')
+
+        const installResultCall = backend.requestBodies.find(c => c.url === '/v1/harnesses/h1/versions/1.0.0/install-result')
+        assert.ok(installResultCall, 'install result must be recorded after an accepted elicitation')
+      }, { cwd, elicitResponse: { action: 'accept', content: { confirm: true } } })
+    } finally {
+      await backend.close()
+    }
+  })
+})
+
+test('apply_harness_install: elicitation DECLINE aborts with zero writes and no recorded install', { skip }, async () => {
+  await withTempCwd(async cwd => {
+    const backend = await startFakeBackend()
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0', 200, agentManifest())
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0/download', 200, agentManifest())
+    backend.setRoute('POST /v1/harnesses/h1/versions/1.0.0/approval', 200, {
+      approval_id: 'appr-1', harness_id: 'h1', version: '1.0.0', manifest_hash: 'sha256:planhash',
+    })
+    backend.setRoute('POST /v1/harnesses/h1/versions/1.0.0/install-result', 200, {
+      approval_id: 'appr-1', harness_id: 'h1', version: '1.0.0', manifest_hash: 'sha256:planhash', status: 'installed',
+    })
+    try {
+      await withClient(backend, async client => {
+        const result = await client.callTool({
+          name: 'apply_harness_install',
+          arguments: {
+            harness_id: 'h1', version: '1.0.0', target_tool: 'claude', target_scope: 'project',
+            manifest_hash: 'sha256:planhash',
+          },
+        })
+        const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+        assert.equal(parsed.result_status, 'declined')
+        assert.equal(parsed.written.length, 0)
+        assert.match(parsed.errors[0].message, /declined/)
+
+        assert.equal(existsSync(join(cwd, '.claude')), false, 'must not write any file when the user declines')
+
+        const installResultCall = backend.requestBodies.find(c => c.url === '/v1/harnesses/h1/versions/1.0.0/install-result')
+        assert.equal(installResultCall, undefined, 'must not record an install result when the user declines')
+      }, { cwd, elicitResponse: { action: 'decline' } })
+    } finally {
+      await backend.close()
+    }
+  })
+})
+
+test('apply_harness_install: elicitation capability advertised but elicitInput throws falls back to flag-based gate — refuses without flags, zero writes', { skip }, async () => {
+  await withTempCwd(async cwd => {
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    const destDir = join(cwd, '.claude', 'agents')
+    mkdirSync(destDir, { recursive: true })
+    writeFileSync(join(destDir, 'foo.md'), 'stale content that differs from the manifest')
+
+    const backend = await startFakeBackend()
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0', 200, agentManifest())
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0/download', 200, agentManifest())
+    backend.setRoute('POST /v1/harnesses/h1/versions/1.0.0/approval', 200, {
+      approval_id: 'appr-1', harness_id: 'h1', version: '1.0.0', manifest_hash: 'sha256:planhash',
+    })
+    try {
+      await withClient(backend, async client => {
+        const result = await client.callTool({
+          name: 'apply_harness_install',
+          arguments: {
+            harness_id: 'h1', version: '1.0.0', target_tool: 'claude', target_scope: 'project',
+            manifest_hash: 'sha256:planhash',
+            // overwrite_confirmed intentionally omitted — the elicitInput
+            // throw must NOT silently proceed to write; it must fall back
+            // to this pre-existing flag-based gate and refuse.
+          },
+        })
+        const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+        assert.equal(parsed.result_status, 'overwrite_not_confirmed')
+        assert.equal(parsed.written.length, 0)
+
+        // The pre-existing file must be untouched.
+        assert.equal(readFileSync(join(destDir, 'foo.md'), 'utf8'), 'stale content that differs from the manifest')
+
+        const installResultCall = backend.requestBodies.find(c => c.url === '/v1/harnesses/h1/versions/1.0.0/install-result')
+        assert.equal(installResultCall, undefined, 'must not record an install result when the elicitInput throw falls back and is then refused')
+      }, { cwd, elicitThrows: true })
+    } finally {
+      await backend.close()
+    }
+  })
+})
+
+test('apply_harness_install: no elicitation capability falls back to flag-based gate — succeeds with correct flags', { skip }, async () => {
+  await withTempCwd(async cwd => {
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    const destDir = join(cwd, '.claude', 'agents')
+    mkdirSync(destDir, { recursive: true })
+    writeFileSync(join(destDir, 'foo.md'), 'stale content that differs from the manifest')
+
+    const backend = await startFakeBackend()
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0', 200, agentManifest())
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0/download', 200, agentManifest())
+    backend.setRoute('POST /v1/harnesses/h1/versions/1.0.0/approval', 200, {
+      approval_id: 'appr-1', harness_id: 'h1', version: '1.0.0', manifest_hash: 'sha256:planhash',
+    })
+    backend.setRoute('POST /v1/harnesses/h1/versions/1.0.0/install-result', 200, {
+      approval_id: 'appr-1', harness_id: 'h1', version: '1.0.0', manifest_hash: 'sha256:planhash', status: 'installed',
+    })
+    try {
+      await withClient(backend, async client => {
+        const result = await client.callTool({
+          name: 'apply_harness_install',
+          arguments: {
+            harness_id: 'h1', version: '1.0.0', target_tool: 'claude', target_scope: 'project',
+            manifest_hash: 'sha256:planhash',
+            overwrite_confirmed: true,
+          },
+        })
+        assert.notEqual(result.isError, true)
+        const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+        assert.equal(parsed.result_status, 'installed')
+        assert.equal(parsed.written.length, 1)
+        assert.equal(readFileSync(join(destDir, 'foo.md'), 'utf8'), 'hello')
+      }, { cwd })
+    } finally {
+      await backend.close()
+    }
+  })
+})
+
+test('apply_harness_install: no elicitation capability falls back to flag-based gate — refuses without flags, zero writes', { skip }, async () => {
+  await withTempCwd(async cwd => {
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    const destDir = join(cwd, '.claude', 'agents')
+    mkdirSync(destDir, { recursive: true })
+    writeFileSync(join(destDir, 'foo.md'), 'stale content that differs from the manifest')
+
+    const backend = await startFakeBackend()
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0', 200, agentManifest())
+    backend.setRoute('GET /v1/harnesses/h1/versions/1.0.0/download', 200, agentManifest())
+    backend.setRoute('POST /v1/harnesses/h1/versions/1.0.0/approval', 200, {
+      approval_id: 'appr-1', harness_id: 'h1', version: '1.0.0', manifest_hash: 'sha256:planhash',
+    })
+    try {
+      await withClient(backend, async client => {
+        const result = await client.callTool({
+          name: 'apply_harness_install',
+          arguments: {
+            harness_id: 'h1', version: '1.0.0', target_tool: 'claude', target_scope: 'project',
+            manifest_hash: 'sha256:planhash',
+            // overwrite_confirmed intentionally omitted, no elicitation capability advertised
+          },
+        })
+        const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text)
+        assert.equal(parsed.result_status, 'overwrite_not_confirmed')
+        assert.equal(parsed.written.length, 0)
+        assert.equal(readFileSync(join(destDir, 'foo.md'), 'utf8'), 'stale content that differs from the manifest')
+
+        const installResultCall = backend.requestBodies.find(c => c.url === '/v1/harnesses/h1/versions/1.0.0/install-result')
+        assert.equal(installResultCall, undefined, 'must not record an install result when refused')
       }, { cwd })
     } finally {
       await backend.close()

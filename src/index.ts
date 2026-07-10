@@ -3679,20 +3679,41 @@ server.tool(
 )
 
 // apply_harness_install
+//
+// Front gate (additive, runs before any of the existing gates below): asks the
+// user for an explicit, human-readable confirmation of the pending install via
+// MCP elicitation when the connected client advertises the `elicitation`
+// capability. If the client declined/cancelled, or never confirmed
+// `confirm: true`, the handler aborts with ZERO writes and never calls
+// approveHarnessInstall / applyPlan / recordHarnessInstallResult. If the
+// client does not support elicitation (or elicitInput throws), the handler
+// falls back to the pre-existing flag-based gates unchanged
+// (`overwrite_confirmed`, `warning_acknowledged`) — this is a headless-safe
+// fallback, not a bypass: if elicitation is unavailable AND the required
+// flags are missing, the existing refusal paths below still refuse with zero
+// writes exactly as before.
+let loggedClientCapabilitiesOnce = false
+
 server.tool(
   'apply_harness_install',
-  'Apply a previously planned harness install. Requires the manifest_hash returned by plan_harness_install as explicit confirmation of a reviewed diff. Records approve_install (refusing executable hook/plugin manifests without warning_acknowledged), re-downloads the manifest and aborts with hash_mismatch if it drifted since planning, materializes files to their resolved destinations, and calls record_install_result. Never writes without a prior plan_harness_install manifest_hash.',
+  'Apply a previously planned harness install. Requires the manifest_hash returned by plan_harness_install as explicit confirmation of a reviewed diff. Before writing anything, asks the connected user for explicit confirmation of the pending install — via MCP elicitation (a human-readable summary of harness/version/target/diff) when the client supports it, otherwise via the overwrite_confirmed / warning_acknowledged flags. Records approve_install (refusing executable hook/plugin manifests without warning_acknowledged), re-downloads the manifest and aborts with hash_mismatch if it drifted since planning, materializes files to their resolved destinations, and calls record_install_result. Never writes without a prior plan_harness_install manifest_hash and without user confirmation.',
   {
     harness_id:            z.string().describe('Harness ID'),
     version:               z.string().describe('Version string, e.g. "1.0.0"'),
     target_tool:           harnessTargetEnum.describe('Agent tool to install for'),
     target_scope:          harnessScopeEnum.default('project').describe('Install scope: "user" or "project"'),
     manifest_hash:         z.string().describe('manifest_hash from a prior plan_harness_install call — required confirmation that the user reviewed that diff'),
-    warning_acknowledged:  z.boolean().optional().describe('Required when the plan reported requires_acknowledgement: true (hook / claude_code_plugin formats)'),
-    overwrite_confirmed:   z.boolean().optional().describe('Required when any diff entry action is "overwrite"'),
+    warning_acknowledged:  z.boolean().optional().describe('Required when the plan reported requires_acknowledgement: true (hook / claude_code_plugin formats). Also used as the soft-gate fallback when the client does not support MCP elicitation.'),
+    overwrite_confirmed:   z.boolean().optional().describe('Required when any diff entry action is "overwrite". Also used as the soft-gate fallback when the client does not support MCP elicitation.'),
   },
   async ({ harness_id, version, target_tool, target_scope, manifest_hash, warning_acknowledged, overwrite_confirmed }) => {
     try {
+      const caps = server.server.getClientCapabilities()
+      if (!loggedClientCapabilitiesOnce) {
+        loggedClientCapabilitiesOnce = true
+        console.error('[harness] client capabilities:', JSON.stringify(caps))
+      }
+
       // Step 1: record approve_install with the manifest hash from plan (+ ack metadata).
       // The backend rejects executable formats without warning_acknowledged=true.
       const approval = await approveHarnessInstall(harness_id, version, {
@@ -3731,13 +3752,82 @@ server.tool(
       const projectRoot = process.cwd()
       const planResult = await planInstall(download.manifest, target_tool, target_scope, { projectRoot })
 
-      // Step 4a: overwrite gate — refuse the WHOLE apply (no writes at all,
+      // Step 4a: elicitation front gate — ask the user to explicitly confirm
+      // this exact install (harness/version/target/diff) before writing
+      // anything, when the connected client supports MCP elicitation. This is
+      // additive: it runs before, and does not replace, the hash-mismatch gate
+      // above or the overwrite/warning_acknowledged flag gates below.
+      let elicitationConfirmed = false
+      if (caps?.elicitation) {
+        try {
+          const diffLines = planResult.diff.map(d => `  - ${d.action.toUpperCase()}: ${d.destination}`).join('\n')
+          const warningLines = planResult.warnings.length > 0
+            ? `\n\nWarnings:\n${planResult.warnings.map(w => `  - ${w}`).join('\n')}`
+            : ''
+          const message = [
+            `Install harness "${harness_id}" @ ${version} for ${target_tool} (${target_scope} scope)?`,
+            '',
+            'Files:',
+            diffLines,
+            warningLines,
+          ].join('\n')
+
+          const elicitResult = await server.server.elicitInput({
+            message,
+            requestedSchema: {
+              type: 'object',
+              properties: {
+                confirm: {
+                  type: 'boolean',
+                  title: 'Confirm install',
+                  description: 'Approve writing these files to disk',
+                },
+              },
+              required: ['confirm'],
+            },
+          })
+
+          if (elicitResult.action === 'accept' && elicitResult.content?.confirm === true) {
+            elicitationConfirmed = true
+          } else {
+            // 'decline' or 'cancel', or accepted without confirm: true — abort,
+            // zero writes, never call applyPlan/recordHarnessInstallResult.
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  approval_id: approval.approval_id,
+                  manifest_hash: download.manifest_hash,
+                  result_status: 'declined',
+                  written: [],
+                  skipped: [],
+                  errors: [{
+                    destination: '',
+                    message: `user ${elicitResult.action === 'cancel' ? 'cancelled' : 'declined'} the install confirmation — no files were written`,
+                  }],
+                }, null, 2),
+              }],
+            }
+          }
+        } catch (elicitErr) {
+          // Defense-in-depth: a client may advertise the elicitation capability
+          // but still fail/throw on the actual request. Fall back to the
+          // pre-existing flag-based soft gate below rather than proceeding
+          // unconfirmed.
+          console.error('[harness] elicitInput failed, falling back to flag-based confirmation:', (elicitErr as Error).message)
+        }
+      }
+
+      // Step 4b: overwrite gate — refuse the WHOLE apply (no writes at all,
       // not even co-occurring "create" entries) when any diff entry would
       // overwrite an existing file and the caller has not passed
       // overwrite_confirmed: true. This is additional to (does not replace)
-      // the warning_acknowledged gate above and the hash-mismatch gate.
+      // the warning_acknowledged gate above and the hash-mismatch gate. This
+      // flag-based check still runs even after an elicitation ACCEPT, as a
+      // second independent gate — elicitation confirms user intent, this
+      // confirms the specific overwrite risk was acknowledged via the flag.
       const hasOverwrite = planResult.diff.some(d => d.action === 'overwrite')
-      if (hasOverwrite && overwrite_confirmed !== true) {
+      if (hasOverwrite && overwrite_confirmed !== true && !elicitationConfirmed) {
         return {
           content: [{
             type: 'text',
