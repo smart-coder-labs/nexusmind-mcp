@@ -14,7 +14,7 @@
     "start": "node dist/index.js",
     "setup": "node dist/setup.js",
     "pretest": "tsc",
-    "test": "tsx --test src/setup.test.ts src/integration.test.ts src/hooks/pre-compact.test.ts src/hooks/stop.test.ts src/hooks/user-prompt-submit.test.ts src/hooks/session-start.test.ts src/harness-client.test.ts src/harness-tools.test.ts src/harness/resolver.test.ts src/harness/materialize.test.ts src/harness/plan.test.ts src/harness/secret-scan.test.ts src/harness/build-manifest.test.ts src/harness/manifest-validator.test.ts src/harness/config-review.test.ts src/tasks-client.test.ts src/tasks-tools.test.ts",
+    "test": "tsx --test src/setup.test.ts src/verify.test.ts src/integration.test.ts src/hooks/pre-compact.test.ts src/hooks/stop.test.ts src/hooks/user-prompt-submit.test.ts src/hooks/session-start.test.ts src/harness-client.test.ts src/harness-tools.test.ts src/harness/resolver.test.ts src/harness/materialize.test.ts src/harness/plan.test.ts src/harness/secret-scan.test.ts src/harness/build-manifest.test.ts src/harness/manifest-validator.test.ts src/harness/config-review.test.ts src/tasks-client.test.ts src/tasks-tools.test.ts",
     "prepublishOnly": "npm run build && npm test"
   },
   "files": [
