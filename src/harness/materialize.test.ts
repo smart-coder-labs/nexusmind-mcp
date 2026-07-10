@@ -197,7 +197,9 @@ test('applyPlan chmods 0o755 when executable is true (hook script)', async () =>
     })
     await applyPlan([entry], { root })
     const s = await stat(join(root, 'hook.sh'))
-    assert.equal(s.mode & 0o777, 0o755)
+    // POSIX permission bits don't exist on Windows (chmod is effectively a
+    // no-op there), so the executable-bit assertion only applies on POSIX.
+    if (process.platform !== 'win32') assert.equal(s.mode & 0o777, 0o755)
   })
 })
 
@@ -206,7 +208,8 @@ test('applyPlan chmods 0o644 when executable is false', async () => {
     const entry = baseEntry(root, { relative_path: 'foo.md', destination: join(root, 'foo.md'), content: 'hi', executable: false })
     await applyPlan([entry], { root })
     const s = await stat(join(root, 'foo.md'))
-    assert.equal(s.mode & 0o777, 0o644)
+    // POSIX permission bits don't exist on Windows; skip the mode assertion there.
+    if (process.platform !== 'win32') assert.equal(s.mode & 0o777, 0o644)
   })
 })
 
