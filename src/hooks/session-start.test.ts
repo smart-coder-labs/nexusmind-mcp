@@ -92,6 +92,8 @@ test('injects a pending-task reminder line when the caller has pending tasks in 
     assert.ok(taskRequest, 'expected a request to /v1/tasks')
     const url = new URL(`http://x${taskRequest}`)
     assert.equal(url.searchParams.get('assignee'), 'me')
+    // the reminder must be scoped to the current project, not org-wide
+    assert.equal(url.searchParams.get('project'), 'tmp')
   } finally {
     await backend.close()
   }

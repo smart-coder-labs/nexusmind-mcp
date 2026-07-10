@@ -216,6 +216,20 @@ test('delete_task without confirm makes no backend call and refuses', { skip }, 
   }
 })
 
+test('delete_task with confirm false makes no backend call and refuses', { skip }, async () => {
+  const backend = await startFakeBackend()
+  try {
+    await withClient(backend, async client => {
+      const result = await client.callTool({ name: 'delete_task', arguments: { task_id: 't1', confirm: false } })
+      assert.equal(result.isError, true)
+      assert.match(textOf(result), /confirm/i)
+      assert.equal(backend.requests.length, 0)
+    })
+  } finally {
+    await backend.close()
+  }
+})
+
 test('delete_task with confirm true proceeds and soft-deletes', { skip }, async () => {
   const backend = await startFakeBackend()
   backend.setResponse(204, undefined)
