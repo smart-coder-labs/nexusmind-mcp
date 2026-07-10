@@ -139,6 +139,31 @@ Two confirmation flags on `apply_harness_install`:
 
 ---
 
+## Task tools
+
+Team task management — create, assign, and track tasks, link them to OpenSpec changes,
+and manage sprints. All permission-gated backend-side (`task:read` / `task:write` /
+`task:assign` / `task:delete` / `task:manage`); the MCP server adds no client-side authority.
+
+| Tool | Description |
+|------|-------------|
+| `list_my_tasks` | List the calling user's own pending tasks (assignee = the API key's user), optionally filtered by `project` and `status`. |
+| `list_tasks` | List tasks in a project, filterable by `status`, `assignee`, `sprint`, or `label`. |
+| `get_task` | Fetch one task with its assignees, labels, comments, subtasks, and spec links. |
+| `create_task` | Create a task (`title`, optional `description` / `priority` / `due_date` / `project` / `parent_id`). |
+| `update_task` | Patch a task's fields or status (status changes are validated against the transition matrix). |
+| `delete_task` | Soft-delete a task. Requires `confirm: true` — refuses with no HTTP call otherwise. |
+| `assign_task` | Assign or unassign a user to a task. `task:assign`-gated; the assignee must belong to the org. |
+| `add_task_comment` | Add a comment to a task. |
+| `add_task_label` | Add a label/tag to a task. |
+| `link_task_spec` | Link a task to an OpenSpec change by its folder name (many-to-many). |
+| `resolve_tasks_for_spec` | Transition every task linked to a given OpenSpec change to `done` — invoked by the sdd-verify / sdd-archive flow. |
+| `list_sprints` | List sprints for a project. |
+| `create_sprint` | Create a sprint. |
+| `create_sprint_retrospective` | Record a persisted retrospective for a sprint (real backend record — replaces the former client-side memory-aggregation stub). |
+
+---
+
 ## Manual configuration
 
 ### Claude Code

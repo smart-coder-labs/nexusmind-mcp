@@ -43,7 +43,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (res.status === 204) return undefined as T
-  return res.json() as Promise<T>
+
+  // Some relationship POST endpoints (e.g. spec-links) return 201 CREATED
+  // with an empty body (content-length 0). res.json() throws SyntaxError
+  // on an empty body, so read as text first and treat any empty/whitespace
+  // body as no-content regardless of status, instead of special-casing 204.
+  const text = await res.text()
+  if (text.trim() === '') return undefined as T
+  return JSON.parse(text) as T
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -1391,4 +1398,283 @@ export function createHarnessConfigReview(
   }
   if (input.status !== undefined) body.status = input.status
   return request<HarnessConfigReview>('/v1/harness-config-reviews', { method: 'POST', body: JSON.stringify(body) })
+}
+
+// ── Tasks ────────────────────────────────────────────────────────────────────
+//
+// Thin permissioned wrappers over the backend task API (design.md §3, §5.2).
+// Every route is gated server-side on the caller's Bearer key (`task:read` /
+// `task:write` / `task:assign` / `task:delete` / `task:manage`) — this file
+// adds no client-side authority and never resolves `me` itself; `assignee=me`
+// is a literal query value the backend resolves from the Bearer token
+// (design.md §5.1 — "'me' derives from the API key server-side; no user arg").
+
+export type TaskStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled'
+export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent'
+export type SprintStatus = 'planned' | 'active' | 'completed'
+
+export interface TaskAssignee {
+  id: string
+  name?: string
+  email?: string
+  [key: string]: unknown
+}
+
+export interface Task {
+  id: string
+  org_id?: string
+  project: string
+  title: string
+  description?: string | null
+  status: TaskStatus
+  priority?: TaskPriority
+  due_date?: string | null
+  parent_id?: string | null
+  sprint_id?: string | null
+  created_by?: string
+  created_at?: string
+  updated_at?: string
+  archived_at?: string | null
+  assignees?: TaskAssignee[]
+  labels?: string[]
+  comment_count?: number
+  spec_links?: string[]
+  subtask_count?: number
+  [key: string]: unknown
+}
+
+export interface TaskComment {
+  id: string
+  task_id: string
+  user_id: string
+  author_name?: string
+  body: string
+  created_at?: string
+  [key: string]: unknown
+}
+
+export interface Sprint {
+  id: string
+  org_id?: string
+  project: string
+  name: string
+  goal?: string | null
+  starts_at?: string | null
+  ends_at?: string | null
+  status: SprintStatus
+  created_by?: string
+  created_at?: string
+  archived_at?: string | null
+  task_count?: number
+  [key: string]: unknown
+}
+
+export interface SprintRetrospective {
+  id: string
+  sprint_id: string
+  went_well?: string | null
+  went_wrong?: string | null
+  action_items?: string | null
+  created_by?: string
+  author_name?: string
+  created_at?: string
+  [key: string]: unknown
+}
+
+export interface ListTasksInput {
+  project?: string
+  assignee?: string
+  status?: TaskStatus
+  sprint?: string
+  label?: string
+  parent_id?: string
+  include_archived?: boolean
+  limit?: number
+  offset?: number
+}
+
+function taskListQuery(input: ListTasksInput): string {
+  const qs = new URLSearchParams()
+  if (input.project)          qs.set('project',          input.project)
+  if (input.assignee)         qs.set('assignee',         input.assignee)
+  if (input.status)           qs.set('status',           input.status)
+  if (input.sprint)           qs.set('sprint',           input.sprint)
+  if (input.label)            qs.set('label',            input.label)
+  if (input.parent_id)        qs.set('parent_id',        input.parent_id)
+  if (input.include_archived) qs.set('include_archived', 'true')
+  if (input.limit !== undefined)  qs.set('limit',  String(input.limit))
+  if (input.offset !== undefined) qs.set('offset', String(input.offset))
+  return qs.toString()
+}
+
+export function listTasks(input: ListTasksInput = {}): Promise<Task[]> {
+  const query = taskListQuery(input)
+  return request<Task[]>(query ? `/v1/tasks?${query}` : '/v1/tasks')
+}
+
+export type ListMyTasksInput = Omit<ListTasksInput, 'assignee'>
+
+// `assignee=me` is a literal string the backend resolves server-side from the
+// Bearer token — this function never accepts or forwards a user id.
+export function listMyTasks(input: ListMyTasksInput = {}): Promise<Task[]> {
+  return listTasks({ ...input, assignee: 'me' })
+}
+
+export function getTask(taskId: string): Promise<Task> {
+  return request<Task>(`/v1/tasks/${encodeURIComponent(taskId)}`)
+}
+
+export interface CreateTaskInput {
+  project: string
+  title: string
+  description?: string
+  status?: TaskStatus
+  priority?: TaskPriority
+  due_date?: string
+  parent_id?: string
+  sprint_id?: string
+}
+
+export function createTask(input: CreateTaskInput): Promise<Task> {
+  const body: Record<string, unknown> = { project: input.project, title: input.title }
+  if (input.description !== undefined) body.description = input.description
+  if (input.status !== undefined)      body.status      = input.status
+  if (input.priority !== undefined)    body.priority    = input.priority
+  if (input.due_date !== undefined)    body.due_date    = input.due_date
+  if (input.parent_id !== undefined)   body.parent_id   = input.parent_id
+  if (input.sprint_id !== undefined)   body.sprint_id   = input.sprint_id
+  return request<Task>('/v1/tasks', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export interface UpdateTaskInput {
+  title?: string
+  description?: string
+  status?: TaskStatus
+  priority?: TaskPriority
+  due_date?: string
+  sprint_id?: string
+}
+
+export function updateTask(taskId: string, input: UpdateTaskInput): Promise<Task> {
+  const body: Record<string, unknown> = {}
+  if (input.title !== undefined)       body.title       = input.title
+  if (input.description !== undefined) body.description = input.description
+  if (input.status !== undefined)      body.status      = input.status
+  if (input.priority !== undefined)    body.priority    = input.priority
+  if (input.due_date !== undefined)    body.due_date    = input.due_date
+  if (input.sprint_id !== undefined)   body.sprint_id   = input.sprint_id
+  return request<Task>(`/v1/tasks/${encodeURIComponent(taskId)}`, { method: 'PATCH', body: JSON.stringify(body) })
+}
+
+export function deleteTask(taskId: string): Promise<void> {
+  return request<void>(`/v1/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' })
+}
+
+export function assignTask(taskId: string, userIds: string[]): Promise<TaskAssignee[]> {
+  return request<TaskAssignee[]>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/assignees`,
+    { method: 'POST', body: JSON.stringify({ user_ids: userIds }) },
+  )
+}
+
+export function unassignTask(taskId: string, userId: string): Promise<void> {
+  return request<void>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/assignees/${encodeURIComponent(userId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function addTaskComment(taskId: string, body: string): Promise<TaskComment> {
+  return request<TaskComment>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/comments`,
+    { method: 'POST', body: JSON.stringify({ body }) },
+  )
+}
+
+export function listTaskComments(taskId: string): Promise<TaskComment[]> {
+  return request<TaskComment[]>(`/v1/tasks/${encodeURIComponent(taskId)}/comments`)
+}
+
+export function addTaskLabel(taskId: string, label: string): Promise<string[]> {
+  return request<string[]>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/labels`,
+    { method: 'POST', body: JSON.stringify({ label }) },
+  )
+}
+
+export function linkTaskSpec(taskId: string, specChangeName: string): Promise<void> {
+  return request<void>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/spec-links`,
+    { method: 'POST', body: JSON.stringify({ spec_change_name: specChangeName }) },
+  )
+}
+
+export function listTaskSpecs(taskId: string): Promise<string[]> {
+  return request<string[]>(`/v1/tasks/${encodeURIComponent(taskId)}/spec-links`)
+}
+
+export interface ResolveTasksForSpecResponse {
+  resolved: string[]
+}
+
+export function resolveTasksForSpec(specChangeName: string): Promise<ResolveTasksForSpecResponse> {
+  return request<ResolveTasksForSpecResponse>(
+    '/v1/tasks/resolve-by-spec',
+    { method: 'POST', body: JSON.stringify({ spec_change_name: specChangeName }) },
+  )
+}
+
+export interface ListSprintsInput {
+  project?: string
+  status?: SprintStatus
+  include_archived?: boolean
+  limit?: number
+  offset?: number
+}
+
+export function listSprints(input: ListSprintsInput = {}): Promise<Sprint[]> {
+  const qs = new URLSearchParams()
+  if (input.project)          qs.set('project',          input.project)
+  if (input.status)           qs.set('status',           input.status)
+  if (input.include_archived) qs.set('include_archived', 'true')
+  if (input.limit !== undefined)  qs.set('limit',  String(input.limit))
+  if (input.offset !== undefined) qs.set('offset', String(input.offset))
+  const query = qs.toString()
+  return request<Sprint[]>(query ? `/v1/sprints?${query}` : '/v1/sprints')
+}
+
+export interface CreateSprintInput {
+  project: string
+  name: string
+  goal?: string
+  starts_at?: string
+  ends_at?: string
+}
+
+export function createSprint(input: CreateSprintInput): Promise<Sprint> {
+  const body: Record<string, unknown> = { project: input.project, name: input.name }
+  if (input.goal !== undefined)       body.goal       = input.goal
+  if (input.starts_at !== undefined)  body.starts_at  = input.starts_at
+  if (input.ends_at !== undefined)    body.ends_at    = input.ends_at
+  return request<Sprint>('/v1/sprints', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export interface CreateRetrospectiveInput {
+  went_well?: string
+  went_wrong?: string
+  action_items?: string
+}
+
+export function createSprintRetrospective(
+  sprintId: string,
+  input: CreateRetrospectiveInput,
+): Promise<SprintRetrospective> {
+  const body: Record<string, unknown> = {}
+  if (input.went_well !== undefined)    body.went_well    = input.went_well
+  if (input.went_wrong !== undefined)   body.went_wrong   = input.went_wrong
+  if (input.action_items !== undefined) body.action_items = input.action_items
+  return request<SprintRetrospective>(
+    `/v1/sprints/${encodeURIComponent(sprintId)}/retrospectives`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
 }

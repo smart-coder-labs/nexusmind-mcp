@@ -19,8 +19,8 @@ if (process.argv[2] === 'doctor') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview } from './client.js'
-import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective } from './client.js'
+import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget, Task, TaskComment, TaskAssignee, Sprint, SprintRetrospective, TaskStatus, TaskPriority, SprintStatus } from './client.js'
 import { planInstall } from './harness/plan.js'
 import { applyPlan } from './harness/materialize.js'
 import { resolveDestinationRoot } from './harness/resolver.js'
@@ -2955,50 +2955,360 @@ server.tool(
   }
 )
 
-// ── Sprint / Standup Tools ───────────────────────────────────────────────────
+// ── Tasks ────────────────────────────────────────────────────────────────────
+//
+// Thin permissioned wrappers over the backend task API (design.md §5). Each
+// tool adds NO authority beyond the caller's existing `task:*` grants on their
+// Bearer key — a denied backend call surfaces here as `isError: true` with the
+// backend's error text, exactly like the harness tools above. `list_my_tasks`
+// never accepts a user id: "me" is resolved server-side from the caller's API
+// key (client.ts `listMyTasks` hard-codes `assignee: 'me'`).
 
+const taskStatusEnum = z.enum(['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled'])
+const taskPriorityEnum = z.enum(['low', 'medium', 'high', 'urgent'])
+const sprintStatusEnum = z.enum(['planned', 'active', 'completed'])
+
+function formatTaskAssignee(a: TaskAssignee): string {
+  return a.name ?? a.email ?? a.id
+}
+
+function formatTaskLine(t: Task): string {
+  const assignees = t.assignees && t.assignees.length > 0
+    ? ` [${t.assignees.map(formatTaskAssignee).join(', ')}]`
+    : ''
+  const due = t.due_date ? ` (due ${t.due_date})` : ''
+  const priority = t.priority ? ` {${t.priority}}` : ''
+  return `• [${t.id}] ${t.title} — ${t.status}${priority}${due}${assignees}`
+}
+
+function formatTaskList(tasks: Task[]): string {
+  if (tasks.length === 0) return 'No tasks found.'
+  return tasks.map(formatTaskLine).join('\n')
+}
+
+function formatTask(t: Task): string {
+  const lines = [
+    `Task ${t.id}: ${t.title}`,
+    `Project: ${t.project}`,
+    `Status: ${t.status}`,
+  ]
+  if (t.priority) lines.push(`Priority: ${t.priority}`)
+  if (t.due_date) lines.push(`Due: ${t.due_date}`)
+  if (t.description) lines.push(`Description: ${t.description}`)
+  if (t.assignees && t.assignees.length > 0) lines.push(`Assignees: ${t.assignees.map(formatTaskAssignee).join(', ')}`)
+  if (t.labels && t.labels.length > 0) lines.push(`Labels: ${t.labels.join(', ')}`)
+  if (t.spec_links && t.spec_links.length > 0) lines.push(`Spec links: ${t.spec_links.join(', ')}`)
+  if (t.comment_count !== undefined) lines.push(`Comments: ${t.comment_count}`)
+  if (t.subtask_count !== undefined) lines.push(`Subtasks: ${t.subtask_count}`)
+  return lines.join('\n')
+}
+
+function formatSprint(s: Sprint): string {
+  const goal = s.goal ? ` — ${s.goal}` : ''
+  const count = s.task_count !== undefined ? ` (${s.task_count} tasks)` : ''
+  return `• [${s.id}] ${s.name} — ${s.status}${goal}${count}`
+}
+
+function formatSprintList(sprints: Sprint[]): string {
+  if (sprints.length === 0) return 'No sprints found.'
+  return sprints.map(formatSprint).join('\n')
+}
+
+function formatRetrospective(r: SprintRetrospective): string {
+  const lines = [`Retrospective ${r.id} (sprint ${r.sprint_id})`]
+  if (r.went_well)    lines.push(`Went well: ${r.went_well}`)
+  if (r.went_wrong)   lines.push(`Went wrong: ${r.went_wrong}`)
+  if (r.action_items) lines.push(`Action items: ${r.action_items}`)
+  return lines.join('\n')
+}
+
+// list_my_tasks
 server.tool(
-  'create_sprint_retrospective',
-  'Generate a sprint retrospective from recent memories grouped by type.',
+  'list_my_tasks',
+  "List the caller's own assigned tasks. Identity is resolved server-side from the NEXUSMIND_API_KEY used for the call — never pass a user id. Optionally filter by project and status.",
   {
-    sprint_name: z.string().optional().describe('Label for the sprint (e.g. "Sprint 42")'),
-    since:       z.string().optional().describe('ISO date string — start of the period (default: 14 days ago)'),
-    project:     z.string().optional().describe('Project to filter memories by'),
+    project: z.string().optional().describe('Filter to a specific project'),
+    status:  taskStatusEnum.optional().describe('Filter by task status'),
+  },
+  async ({ project, status }) => {
+    try {
+      const tasks = await listMyTasks({ project, status })
+      return { content: [{ type: 'text', text: formatTaskList(tasks) }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// list_tasks
+server.tool(
+  'list_tasks',
+  'List tasks with general filters (project, status, sprint, label, assignee). Requires task:read for the target project.',
+  {
+    project:  z.string().optional().describe('Filter to a specific project'),
+    status:   taskStatusEnum.optional().describe('Filter by task status'),
+    sprint:   z.string().optional().describe('Filter by sprint id'),
+    label:    z.string().optional().describe('Filter by label'),
+    assignee: z.string().optional().describe('Filter by assignee user id (use list_my_tasks for the caller\'s own tasks)'),
+    limit:    z.number().int().min(1).optional().describe('Max results'),
   },
   async (input) => {
     try {
-      const memories = await listMemories({ project: input.project, limit: 50 })
-      const since = input.since ? new Date(input.since) : new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
-      const recent = (memories ?? []).filter((m: any) => new Date(m.created_at) >= since)
-      const byType = {
-        shipped:     recent.filter((m: any) => m.tags?.some((t: string) => ['feature','shipped','done'].includes(t))),
-        decisions:   recent.filter((m: any) => m.tags?.some((t: string) => ['decision','adr'].includes(t))),
-        bugs:        recent.filter((m: any) => m.tags?.some((t: string) => ['bugfix','fix','bug'].includes(t))),
-        discoveries: recent.filter((m: any) => m.tags?.some((t: string) => ['discovery','learning'].includes(t))),
+      const tasks = await listTasks(input)
+      return { content: [{ type: 'text', text: formatTaskList(tasks) }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// get_task
+server.tool(
+  'get_task',
+  'Get hydrated detail for a single task (assignees, labels, spec links, comment/subtask counts). Requires task:read.',
+  {
+    task_id: z.string().describe('Task ID'),
+  },
+  async ({ task_id }) => {
+    try {
+      const task = await getTask(task_id)
+      return { content: [{ type: 'text', text: formatTask(task) }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// create_task
+server.tool(
+  'create_task',
+  'Create a task in a project. Requires task:write for the target project; the call fails and no task is created if the caller lacks it.',
+  {
+    project:     z.string().describe('Project name'),
+    title:       z.string().describe('Task title'),
+    description: z.string().optional().describe('Task description'),
+    priority:    taskPriorityEnum.optional().describe('Task priority (default: medium)'),
+    due_date:    z.string().optional().describe('ISO-8601 due date'),
+    parent_id:   z.string().optional().describe('Parent task id, to create this as a subtask'),
+    sprint_id:   z.string().optional().describe('Sprint id to attach this task to'),
+  },
+  async (input) => {
+    try {
+      const task = await createTask(input)
+      return { content: [{ type: 'text', text: `Task created.\n${formatTask(task)}` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// update_task
+server.tool(
+  'update_task',
+  'Update a task (title, description, status, priority, due date, sprint). Status transitions are validated server-side by the status transition matrix. Requires task:write.',
+  {
+    task_id:     z.string().describe('Task ID'),
+    title:       z.string().optional().describe('New title'),
+    description: z.string().optional().describe('New description'),
+    status:      taskStatusEnum.optional().describe('New status — validated against the allowed transition matrix server-side'),
+    priority:    taskPriorityEnum.optional().describe('New priority'),
+    due_date:    z.string().optional().describe('New ISO-8601 due date'),
+    sprint_id:   z.string().optional().describe('New sprint id'),
+  },
+  async ({ task_id, ...input }) => {
+    try {
+      const task = await updateTask(task_id, input)
+      return { content: [{ type: 'text', text: `Task updated.\n${formatTask(task)}` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// delete_task — confirm-guard, mirrors delete_memory
+server.tool(
+  'delete_task',
+  'Soft-delete a task. The USER must request deletion explicitly — DO NOT delete autonomously. Required: confirm: true. Without confirm: true this tool refuses and makes no backend call. Requires task:delete.',
+  {
+    task_id: z.string().describe('Task ID'),
+    confirm: z.boolean().describe('Must be true to perform the deletion. Without this, the tool refuses.'),
+  },
+  async ({ task_id, confirm }) => {
+    if (confirm !== true) {
+      return {
+        content: [{
+          type: 'text',
+          text: 'Refused: delete_task requires confirm: true. The user must request deletion explicitly. No HTTP request was made.',
+        }],
+        isError: true,
       }
-      const sprintLabel = input.sprint_name ?? `Sprint ending ${new Date().toLocaleDateString()}`
-      const fmt = (arr: any[]) => arr.length ? arr.slice(0, 10).map((m: any) => `- ${m.content.slice(0, 120)}`).join('\n') : '- (none recorded)'
-      const text = [
-        `# Sprint Retrospective: ${sprintLabel}`,
-        `Period: ${since.toLocaleDateString()} → ${new Date().toLocaleDateString()}`,
-        `Memories analyzed: ${recent.length}`,
-        '',
-        '## ✅ Shipped',
-        fmt(byType.shipped),
-        '',
-        '## 🔧 Bugs',
-        fmt(byType.bugs),
-        '',
-        '## 🧭 Decisions',
-        fmt(byType.decisions),
-        '',
-        '## 💡 Discoveries',
-        fmt(byType.discoveries),
-        '',
-        '## Summary',
-        `Shipped:${byType.shipped.length} Bugs:${byType.bugs.length} Decisions:${byType.decisions.length} Learnings:${byType.discoveries.length}`,
-      ].join('\n')
+    }
+    try {
+      await deleteTask(task_id)
+      return { content: [{ type: 'text', text: `Task deleted (id: ${task_id})` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// assign_task
+server.tool(
+  'assign_task',
+  'Assign one or more users to a task. Requires task:assign; the call fails and no assignee record is created if the caller lacks it.',
+  {
+    task_id:  z.string().describe('Task ID'),
+    user_ids: z.array(z.string()).describe('User IDs to assign to the task'),
+  },
+  async ({ task_id, user_ids }) => {
+    try {
+      const assignees = await assignTask(task_id, user_ids)
+      const text = assignees.length > 0
+        ? `Assigned: ${assignees.map(formatTaskAssignee).join(', ')}`
+        : 'No assignees returned.'
       return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// add_task_comment
+server.tool(
+  'add_task_comment',
+  'Add a comment to a task. Requires task:write.',
+  {
+    task_id: z.string().describe('Task ID'),
+    body:    z.string().describe('Comment body'),
+  },
+  async ({ task_id, body }) => {
+    try {
+      const comment = await addTaskComment(task_id, body)
+      return { content: [{ type: 'text', text: `Comment added (id: ${comment.id}): ${comment.body}` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// add_task_label
+server.tool(
+  'add_task_label',
+  'Add a free-text label to a task. Requires task:write.',
+  {
+    task_id: z.string().describe('Task ID'),
+    label:   z.string().describe('Label text'),
+  },
+  async ({ task_id, label }) => {
+    try {
+      const labels = await addTaskLabel(task_id, label)
+      return { content: [{ type: 'text', text: `Labels: ${labels.join(', ') || '(none)'}` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// link_task_spec
+server.tool(
+  'link_task_spec',
+  'Link a task to an openspec change by folder name (kebab-case). Requires task:write. The backend validates the spec folder exists in the active or archived tree.',
+  {
+    task_id:          z.string().describe('Task ID'),
+    spec_change_name: z.string().describe('openspec change folder name (kebab-case)'),
+  },
+  async ({ task_id, spec_change_name }) => {
+    try {
+      await linkTaskSpec(task_id, spec_change_name)
+      return { content: [{ type: 'text', text: `Linked task ${task_id} to spec "${spec_change_name}"` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// resolve_tasks_for_spec — intended for invocation by the sdd-verify/sdd-archive flow
+server.tool(
+  'resolve_tasks_for_spec',
+  'Transition every task linked to an openspec change to done. Intended for invocation by the sdd-verify/sdd-archive flow once a change is complete. Requires task:write; already-done/cancelled tasks are skipped (idempotent).',
+  {
+    spec_change_name: z.string().describe('openspec change folder name (kebab-case)'),
+  },
+  async ({ spec_change_name }) => {
+    try {
+      const { resolved } = await resolveTasksForSpec(spec_change_name)
+      const text = resolved.length > 0
+        ? `Resolved ${resolved.length} task(s) linked to "${spec_change_name}": ${resolved.join(', ')}`
+        : `No open tasks linked to "${spec_change_name}" — nothing to resolve.`
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// list_sprints
+server.tool(
+  'list_sprints',
+  'List sprints, optionally filtered by project and status. Requires task:read.',
+  {
+    project: z.string().optional().describe('Filter to a specific project'),
+    status:  sprintStatusEnum.optional().describe('Filter by sprint status'),
+  },
+  async ({ project, status }) => {
+    try {
+      const sprints = await listSprints({ project, status })
+      return { content: [{ type: 'text', text: formatSprintList(sprints) }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// create_sprint
+server.tool(
+  'create_sprint',
+  'Create a sprint for a project. Requires task:manage.',
+  {
+    project:    z.string().describe('Project name'),
+    name:       z.string().describe('Sprint name (e.g. "Sprint 42")'),
+    goal:       z.string().optional().describe('Sprint goal'),
+    starts_at:  z.string().optional().describe('ISO-8601 start date'),
+    ends_at:    z.string().optional().describe('ISO-8601 end date'),
+  },
+  async (input) => {
+    try {
+      const sprint = await createSprint(input)
+      return { content: [{ type: 'text', text: `Sprint created.\n${formatSprint(sprint)}` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// ── Sprint / Standup Tools ───────────────────────────────────────────────────
+
+// create_sprint_retrospective — REPURPOSED (design.md §5.3): the original tool
+// was a pure client-side stub that aggregated recent memories and persisted
+// nothing. It now takes sprint_id + retro fields and POSTs a real
+// SprintRetrospective to the backend. Kept the tool name to avoid breaking
+// existing agent muscle memory/prompts; the old memory-aggregation output was
+// cosmetic and duplicated generate_daily_standup, so no capability is lost —
+// generate_daily_standup is untouched below. R2 (design.md §11): confirm no
+// external automation depends on the old aggregation output before merging.
+server.tool(
+  'create_sprint_retrospective',
+  'Record a sprint retrospective for a sprint (went well / went wrong / action items). Persists to the backend via POST /v1/sprints/:id/retrospectives. Requires task:manage.',
+  {
+    sprint_id:     z.string().describe('Sprint ID'),
+    went_well:     z.string().optional().describe('What went well during the sprint'),
+    went_wrong:    z.string().optional().describe('What went wrong during the sprint'),
+    action_items:  z.string().optional().describe('Action items for next sprint'),
+  },
+  async ({ sprint_id, ...input }) => {
+    try {
+      const retro = await createSprintRetrospective(sprint_id, input)
+      return { content: [{ type: 'text', text: `Retrospective recorded.\n${formatRetrospective(retro)}` }] }
     } catch (err) {
       return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
     }
