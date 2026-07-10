@@ -16,6 +16,15 @@ if (process.argv[2] === 'doctor') {
   process.exit(await doctor())
 }
 
+// Instant, side-effect-free liveness probe. Setup/doctor run `npx -y <pkg>@latest
+// smoke` to confirm npx can actually launch this package's bin — a corrupted npx
+// cache makes that fail with "'nexusmind-mcp' is not recognized", which otherwise
+// surfaces only as an opaque MCP "connection closed: initialize response".
+if (process.argv[2] === 'smoke') {
+  process.stdout.write('nexusmind-smoke-ok\n')
+  process.exit(0)
+}
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'

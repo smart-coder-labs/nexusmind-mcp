@@ -8,6 +8,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { verifyCredentials, maskKey } from './verify.js'
+import { probeNpxLaunch, clearNpxCache } from './npx-health.js'
 
 const c = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
@@ -93,6 +94,24 @@ export async function doctor(): Promise<number> {
     line(`  NEXUSMIND_BASE_URL = ${cfg.NEXUSMIND_BASE_URL || '(unset)'}`)
     if (procKey && cfg.NEXUSMIND_API_KEY && cfg.NEXUSMIND_API_KEY !== procKey) {
       warn('Codex config key differs from this process env key — a stale env var may shadow it.')
+    }
+  }
+  line('')
+
+  // npx launch health — the exact failure that shows up in clients as
+  // "connection closed: initialize response". Self-heals a corrupted cache.
+  line(`${c.bold}npx launch (how clients start the server):${c.reset}`)
+  const probe = probeNpxLaunch()
+  if (probe === 'ok') {
+    ok('npx can launch the server.')
+  } else if (probe === 'inconclusive') {
+    warn('npx launched the server but the published @latest is older than this version — cannot confirm the marker. Not a cache problem.')
+  } else {
+    warn('npx failed to resolve the server bin — corrupted npx cache. Repairing…')
+    if (clearNpxCache() && probeNpxLaunch() !== 'unresolved') {
+      ok('npx cache repaired — the server launches correctly now. Restart your client.')
+    } else {
+      bad('Server still fails to launch via npx. Try: npm cache clean --force')
     }
   }
   line('')

@@ -14,6 +14,7 @@ import * as readline from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
 import { spawnSync } from 'node:child_process'
 import { verifyCredentials, maskKey } from './verify.js'
+import { probeNpxLaunch, clearNpxCache, PACKAGE_SPEC } from './npx-health.js'
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -145,6 +146,30 @@ function writeWindowsEnv(apiKey: string, baseUrl: string) {
   }
   setVar('NEXUSMIND_API_KEY', apiKey)
   setVar('NEXUSMIND_BASE_URL', baseUrl)
+}
+
+// ── npx launch health ─────────────────────────────────────────────────────────
+
+// Verifies clients can launch the server via npx, and self-heals a corrupted npx
+// cache — the real cause behind Codex's opaque "connection closed: initialize
+// response". Shared across all clients since they share one npx cache.
+function verifyAndRepairNpxLaunch() {
+  info('Verifying the server launches via npx…')
+  const first = probeNpxLaunch()
+  if (first === 'ok') { success('Server launches correctly via npx'); return }
+  if (first === 'inconclusive') {
+    info('npx launched the server but could not confirm the version (likely an older published @latest) — skipping.')
+    return
+  }
+  warn('npx could not launch the server — this is usually a corrupted npx cache.')
+  info('Clearing the npx cache and retrying…')
+  if (clearNpxCache() && probeNpxLaunch() !== 'unresolved') {
+    success('npx cache repaired — server launches correctly now')
+    return
+  }
+  error('Server still fails to launch via npx after clearing the cache.')
+  log('  Diagnose with: ' + `${c.cyan}npx ${PACKAGE_SPEC} doctor${c.reset}`)
+  log('  Or clear the cache manually: ' + `${c.cyan}npm cache clean --force${c.reset}`)
 }
 
 // ── Install helpers ───────────────────────────────────────────────────────────
@@ -557,6 +582,14 @@ export async function main() {
   if (doCodex) {
     log(`${c.bold}Setting up Codex CLI…${c.reset}`)
     installCodex(apiKey, baseUrl)
+    log('')
+  }
+
+  // Confirm clients can actually launch the server via npx (and self-heal a
+  // corrupted npx cache) — the cache-corruption failure otherwise surfaces only
+  // as an opaque MCP handshake error in the client, with no hint of the cause.
+  if (doClaude || doCursor || doCodex) {
+    verifyAndRepairNpxLaunch()
     log('')
   }
 
