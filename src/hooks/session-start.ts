@@ -14,6 +14,46 @@ interface SessionStartPayload {
   hook_event_name?: string
 }
 
+// "Pending" excludes the two terminal statuses — mirrors the backend's own
+// definition (design.md §6, spec "Pending Count Excludes Terminal Statuses").
+const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled'])
+const PENDING_TASKS_PREVIEW_LIMIT = 5
+
+interface PendingTaskLike {
+  title: string
+  status: string
+  due_date?: string | null
+}
+
+/** Fetches the caller's tasks for `project` and formats a pending-task
+ *  reminder block, or '' if there are zero pending tasks or the fetch fails.
+ *  Hooks cannot force tool calls (design.md §6 known limitation) — the
+ *  reminder is advisory text injected directly, not a tool invocation. */
+async function buildPendingTasksBlock(project: string): Promise<string> {
+  try {
+    const { listMyTasks } = await import('../client.js')
+    const tasks = await withTimeout(
+      listMyTasks({ project }),
+      FETCH_TIMEOUT_MS,
+    ) as PendingTaskLike[]
+    const pending = tasks.filter(t => !TERMINAL_TASK_STATUSES.has(t.status))
+    if (pending.length === 0) return ''
+
+    const lines = [
+      `### Pending Tasks — ${project}`,
+      `You have ${pending.length} pending task(s) in ${project}. Call list_my_tasks to see them.`,
+      ...pending.slice(0, PENDING_TASKS_PREVIEW_LIMIT).map(t => `- ${t.title} [${t.status}] (due ${t.due_date ?? '—'})`),
+    ]
+    if (pending.length > PENDING_TASKS_PREVIEW_LIMIT) {
+      lines.push(`…and ${pending.length - PENDING_TASKS_PREVIEW_LIMIT} more`)
+    }
+    return lines.join('\n')
+  } catch {
+    // best-effort — omit the block on failure, never block session start
+    return ''
+  }
+}
+
 async function main(): Promise<void> {
   const payload = await readStdinJson<SessionStartPayload>()
   const { apiKey, baseUrl } = getHookEnv()
@@ -47,6 +87,8 @@ async function main(): Promise<void> {
     // best-effort — omit the block on failure
   }
 
+  const pendingTasksBlock = await buildPendingTasksBlock(project)
+
   const lines: string[] = [
     `## NexusMind — Memory Protocol (project: ${project})`,
     '',
@@ -61,6 +103,9 @@ async function main(): Promise<void> {
   }
   if (recentBlock) {
     lines.push('', `### Recent Team Memories (last ${SESSION_RECENT_LIMIT})`, recentBlock)
+  }
+  if (pendingTasksBlock) {
+    lines.push('', pendingTasksBlock)
   }
 
   emitAdditionalContext(payload.hook_event_name || 'SessionStart', lines.join('\n'))

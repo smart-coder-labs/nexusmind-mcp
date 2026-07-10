@@ -19,6 +19,11 @@
   formatted markdown summary, persisting nothing). The tool name and general
   purpose are unchanged; the input/output shape changed to `sprint_id` +
   retro fields. `generate_daily_standup` is untouched.
+- **SessionStart hook — pending-task reminder.** The existing SessionStart
+  hook now also fetches the caller's pending tasks (any status other than
+  `done`/`cancelled`) for the active project and injects a short reminder
+  block (up to 5 tasks, then "…and N more"). Silent when there are zero
+  pending tasks or the backend call fails — never blocks session start.
 
 ## 0.6.2
 
