@@ -1,8 +1,13 @@
 name: publish
 
-# Publishes to npm on a v* tag, authenticating via OIDC trusted publishing —
-# no NPM_TOKEN secret. The trusted publisher must be configured on npmjs.com
-# (package settings) with this repository and this exact workflow filename.
+# Publishes to npm on a v* tag, authenticating with the NPM_TOKEN repo secret.
+#
+# NPM_TOKEN must be a granular access token with "Bypass two-factor
+# authentication" enabled — the account enforces 2FA for writes, and without
+# that flag npm rejects the publish. `setup-node`'s registry-url writes an
+# .npmrc pointing at NODE_AUTH_TOKEN, so the publish step must export it or npm
+# authenticates as anonymous and the registry answers 404 (not 403) for a
+# package you cannot see.
 #
 # Release flow:
 #   1. bump the version in package.json, commit, push to main
@@ -17,7 +22,6 @@ on:
       - 'v*'
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -32,13 +36,18 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: npm
 
-      # Trusted publishing needs npm >= 11.5.1. Pin the major rather than
-      # chasing @latest: npm 12 requires node ^22.22.2 || ^24.15.0 || >=26, so
-      # `npm@latest` breaks itself on whatever node the runner happens to ship.
-      - name: Install a trusted-publishing-capable npm
+      # Fail fast and legibly. Without this, a missing/misnamed secret only
+      # surfaces after the full build+test run, as a 404 that reads like the
+      # package does not exist.
+      - name: Verify the NPM_TOKEN secret is present
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm install -g npm@^11
-          npm --version
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "The NPM_TOKEN repo secret is empty or missing." >&2
+            echo "Add it under Settings > Secrets and variables > Actions." >&2
+            exit 1
+          fi
 
       - run: npm ci
 
@@ -54,3 +63,5 @@ jobs:
       # `npm publish` runs prepublishOnly (build + full test suite) first, so a
       # broken commit cannot be published even if the tag was pushed.
       - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
