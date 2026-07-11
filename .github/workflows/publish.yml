@@ -1,0 +1,52 @@
+name: publish
+
+# Publishes to npm on a v* tag, authenticating via OIDC trusted publishing —
+# no NPM_TOKEN secret. The trusted publisher must be configured on npmjs.com
+# (package settings) with this repository and this exact workflow filename.
+#
+# Release flow:
+#   1. bump the version in package.json, commit, push to main
+#   2. git tag vX.Y.Z && git push origin vX.Y.Z
+#
+# The tag must match package.json's version — the guard below fails the run
+# otherwise, so a mistagged release never reaches npm.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Trusted publishing needs node >= 22.14 and npm >= 11.5.1.
+          node-version: '22.14'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Upgrade npm to a trusted-publishing-capable version
+        run: npm install -g npm@latest
+
+      - run: npm ci
+
+      - name: Verify the tag matches package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $pkg" >&2
+            exit 1
+          fi
+
+      # `npm publish` runs prepublishOnly (build + full test suite) first, so a
+      # broken commit cannot be published even if the tag was pushed.
+      - run: npm publish
