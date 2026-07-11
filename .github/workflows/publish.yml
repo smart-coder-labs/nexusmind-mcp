@@ -28,13 +28,17 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # Trusted publishing needs node >= 22.14 and npm >= 11.5.1.
-          node-version: '22.14'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           cache: npm
 
-      - name: Upgrade npm to a trusted-publishing-capable version
-        run: npm install -g npm@latest
+      # Trusted publishing needs npm >= 11.5.1. Pin the major rather than
+      # chasing @latest: npm 12 requires node ^22.22.2 || ^24.15.0 || >=26, so
+      # `npm@latest` breaks itself on whatever node the runner happens to ship.
+      - name: Install a trusted-publishing-capable npm
+        run: |
+          npm install -g npm@^11
+          npm --version
 
       - run: npm ci
 
