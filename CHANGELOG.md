@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.8.3
+
+### Fixed
+
+- **`setup` now actually installs the Claude Code plugin instead of only
+  printing the commands.** Since commit `e785bd1` (2026-07-01), `installClaudeCode`
+  only logged `/plugin marketplace add …` / `/plugin install …` as text for the
+  user to run by hand — it never spawned them. Because every Claude Code
+  lifecycle hook (`SessionStart`, `UserPromptSubmit`, `PreCompact`,
+  `PostCompact`, `Stop`, `SubagentStop`) ships exclusively inside that plugin,
+  this meant **no Claude Code user ever got hooks, on any platform** (confirmed
+  on both macOS and Linux — `installed_plugins.json` never gained a
+  `nexusmind@nexusmind` entry from setup). Codex was unaffected; its
+  `registerCodexMcp` path already used a real `spawnSync` call. `setup` now
+  runs `claude plugin marketplace add smart-coder-labs/nexusmind-claude-plugin
+  --scope user` followed by `claude plugin install nexusmind@nexusmind --scope
+  user` when the `claude` CLI is available, falling back to the previous
+  direct-`~/.claude.json`-registration + printed-instructions behavior only if
+  the CLI is missing or either step fails.
+- **Credentials are now written to `~/.claude/settings.json`'s `env` block.**
+  The plugin's `.mcp.json` refers to `${NEXUSMIND_API_KEY}` /
+  `${NEXUSMIND_BASE_URL}`, and until now setup only exported those from shell rc
+  files — which are unreliable: `~/.zshrc` / `~/.bashrc` frequently do not exist
+  at all (setup's `writeShellEnv` silently writes nothing in that case), and a
+  GUI-launched Claude Code does not inherit them even when they do. With no
+  value and no default, Claude Code fails to parse the MCP config outright. This
+  is the same class of bug already documented for Windows — the macOS/Linux
+  flavor of it. Setup now also merges both variables into the `env` block of
+  `~/.claude/settings.json`, documented as *"Environment variables applied to
+  every session and to subprocesses Claude Code spawns from it"* — MCP servers
+  are exactly such subprocesses. It is plain JSON read by the Claude Code binary,
+  with no shell involved, so it works the same on macOS, Linux and Windows. The
+  existing shell-rc export is kept for Cursor and plain-CLI usage.
+- **Legacy duplicate `~/.claude.json` entry is now removed automatically** — but
+  only when the plugin was installed successfully in that same run **and** the
+  `env` block above was written successfully. Both conditions are required: on a
+  machine with no shell rc file, that entry's literal credential values are the
+  *only* working registration, so removing it before a working env source exists
+  would leave the plugin's `${...}` placeholders unresolvable and break the MCP
+  server entirely. If the `env` write fails, setup keeps the entry — or writes a
+  literal-valued one when none exists — so the MCP server keeps working, and it
+  no longer suggests `claude mcp remove nexusmind` in that state. When the plugin
+  is merely *detected* as already installed, setup only warns about the duplicate
+  and never deletes it: that detection reads `installed_plugins.json`, which
+  records what was installed rather than that it still works. The invariant is
+  that setup never returns leaving the user with zero working MCP registrations. When setup installs the plugin itself, it now
+  deletes the leftover direct `mcpServers.nexusmind` entry (written by an old
+  setup version, or by setup's own fallback path), which would otherwise
+  duplicate the plugin's MCP registration and load every tool twice. This
+  removal happens **only** when the plugin was installed successfully in that
+  same run. When the plugin is merely *detected* as already installed, setup
+  still only warns and prints `claude mcp remove nexusmind` — that detection
+  reads `installed_plugins.json`, which records what was installed rather than
+  that it still works, and deleting a working direct registration on the
+  strength of a possibly-stale record could leave the user with no MCP
+  registration at all.
+
 ## 0.8.2
 
 ### Fixed

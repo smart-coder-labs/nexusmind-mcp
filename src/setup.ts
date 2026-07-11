@@ -98,16 +98,21 @@ function mcpEntry() {
 // config.toml) — can resolve them. Platform-dispatched: POSIX shells read env
 // from rc files; Windows has no ~/.zshrc / ~/.bashrc, so the vars must go into
 // the persistent per-user environment instead (see writeWindowsEnv).
-function writeEnvVars(apiKey: string, baseUrl: string) {
+// rcFiles is injectable (defaulting to the real per-user rc files) so tests can
+// exercise the callers of this function without appending to a developer's real
+// ~/.zshrc — pass [] to make the shell-env write a no-op.
+const DEFAULT_RC_FILES = () => [join(HOME, '.zshrc'), join(HOME, '.bashrc')]
+
+function writeEnvVars(apiKey: string, baseUrl: string, rcFiles: string[] = DEFAULT_RC_FILES()) {
   if (process.platform === 'win32') {
     writeWindowsEnv(apiKey, baseUrl)
   } else {
-    writeShellEnv(apiKey, baseUrl)
+    writeShellEnv(apiKey, baseUrl, rcFiles)
   }
 }
 
-function writeShellEnv(apiKey: string, baseUrl: string) {
-  for (const rc of [join(HOME, '.zshrc'), join(HOME, '.bashrc')]) {
+function writeShellEnv(apiKey: string, baseUrl: string, rcFiles: string[] = DEFAULT_RC_FILES()) {
+  for (const rc of rcFiles) {
     if (!existsSync(rc)) continue
     const text = readFileSync(rc, 'utf8')
     const lines: string[] = []
@@ -175,25 +180,27 @@ function verifyAndRepairNpxLaunch() {
 // ── Install helpers ───────────────────────────────────────────────────────────
 
 // The Claude plugin is the canonical registration path for Claude Code — it owns
-// the MCP server entry and hooks. Setup no longer writes a user-level MCP server
-// registration (~/.claude.json or ~/.claude/settings.json) for Claude Code; it only
-// detects the plugin and guides the user to install it if missing.
-function isNexusmindPluginInstalled(): boolean {
-  const data = readJson(INSTALLED_PLUGINS_JSON)
-  if (existsSync(INSTALLED_PLUGINS_JSON) && !('plugins' in data)) {
-    info(`Note: ${INSTALLED_PLUGINS_JSON} exists but has an unexpected shape (no "plugins" key) — treating plugin as not installed.`)
+// the MCP server entry and hooks. installedPluginsPath is injectable (defaulting to
+// the real per-user location) purely for test isolation, same pattern as
+// removeLegacyClaudeJsonEntry's `path` parameter below.
+function isNexusmindPluginInstalled(installedPluginsPath: string = INSTALLED_PLUGINS_JSON): boolean {
+  const data = readJson(installedPluginsPath)
+  if (existsSync(installedPluginsPath) && !('plugins' in data)) {
+    info(`Note: ${installedPluginsPath} exists but has an unexpected shape (no "plugins" key) — treating plugin as not installed.`)
   }
   const plugins = (data.plugins as Record<string, unknown[]>) ?? {}
   const entry = plugins[PLUGIN_KEY]
   return Array.isArray(entry) && entry.length > 0
 }
 
-// Setup used to write a legacy `mcpServers.nexusmind` entry directly into ~/.claude.json.
-// That file is never touched by the current setup flow, so users who ran an old version
-// keep that entry forever — even after installing the plugin, which registers its own
-// MCP server. Two entries pointing at NexusMind causes duplicate tool registration.
-function hasLegacyClaudeJsonEntry(): boolean {
-  const data = readJson(CLAUDE_JSON_PATH)
+// Read-only detection of a legacy `mcpServers.nexusmind` entry in ~/.claude.json
+// (written by an old setup version, or by this setup's own fallback path). Kept
+// separate from removeLegacyClaudeJsonEntry because the two are used in
+// different situations: we may only DETECT (and warn) when the plugin's
+// installed-state is merely *recorded* on disk, and only REMOVE when we have
+// fresh proof the plugin actually installed — see installClaudeCode.
+function hasLegacyClaudeJsonEntry(path: string = CLAUDE_JSON_PATH): boolean {
+  const data = readJson(path)
   const mcpServers = (data.mcpServers as Record<string, unknown>) ?? {}
   return 'nexusmind' in mcpServers
 }
@@ -220,14 +227,15 @@ export function removeLegacyClaudeJsonEntry(path: string = CLAUDE_JSON_PATH): bo
   return true
 }
 
-// Fallback registration when the plugin is not installed: write the MCP server
-// directly into ~/.claude.json so setup works out of the box on every platform.
-// Real values (not ${VAR} placeholders) — Windows has no ~/.zshrc, so shell env
-// vars written by writeShellEnv never reach Claude Code there.
-function writeClaudeJsonMcpEntry(apiKey: string, baseUrl: string): boolean {
-  const data = readJsonStrict(CLAUDE_JSON_PATH)
+// Fallback registration when the plugin is not installed (or fails to install):
+// write the MCP server directly into ~/.claude.json so setup works out of the box
+// on every platform. Real values (not ${VAR} placeholders) — Windows has no
+// ~/.zshrc, so shell env vars written by writeShellEnv never reach Claude Code
+// there. claudeJsonPath is injectable purely for test isolation.
+function writeClaudeJsonMcpEntry(apiKey: string, baseUrl: string, claudeJsonPath: string = CLAUDE_JSON_PATH): boolean {
+  const data = readJsonStrict(claudeJsonPath)
   if (data === null) {
-    error(`${CLAUDE_JSON_PATH} exists but is not valid JSON — not touching it.`)
+    error(`${claudeJsonPath} exists but is not valid JSON — not touching it.`)
     log('  Fix the file, then re-run setup, or register manually:')
     log(`    ${c.cyan}claude mcp add nexusmind --scope user --env NEXUSMIND_API_KEY=${apiKey || '<key>'} --env NEXUSMIND_BASE_URL=${baseUrl} -- npx -y @smart-coder-labs/nexusmind-mcp@latest${c.reset}`)
     return false
@@ -242,13 +250,113 @@ function writeClaudeJsonMcpEntry(apiKey: string, baseUrl: string): boolean {
     },
   }
   data.mcpServers = mcpServers
-  writeJson(CLAUDE_JSON_PATH, data)
+  writeJson(claudeJsonPath, data)
   return true
 }
 
-function installClaudeCode(apiKey: string, baseUrl: string) {
+// Writes NEXUSMIND_API_KEY / NEXUSMIND_BASE_URL into ~/.claude/settings.json's
+// `env` block — the ONLY reliable way to make the ${NEXUSMIND_API_KEY} /
+// ${NEXUSMIND_BASE_URL} placeholders in the plugin's .mcp.json resolve.
+//
+// Claude Code documents `env` as "Environment variables applied to every session
+// and to subprocesses Claude Code spawns from it" (https://code.claude.com/docs/en/settings).
+// MCP servers are exactly such subprocesses. It is plain JSON read by the Claude
+// Code binary — no shell involved — so it works identically on macOS, Linux and
+// Windows (%USERPROFILE%\.claude\settings.json).
+//
+// Shell rc files cannot serve this purpose: ~/.zshrc / ~/.bashrc often do not
+// exist at all (the plugin's placeholders then resolve to nothing and Claude Code
+// fails to parse the config), and even when they do, a GUI-launched Claude Code
+// does not inherit them. That is the same class of bug already documented for
+// Windows in the 0.7.x notes — this is its macOS/Linux flavor.
+//
+// Merges rather than clobbers, and uses readJsonStrict so a corrupt settings.json
+// is reported instead of being silently reset. Returns whether the env block is
+// now in place.
+export function writeClaudeSettingsEnv(apiKey: string, baseUrl: string, settingsPath: string = CLAUDE_SETTINGS): boolean {
+  const data = readJsonStrict(settingsPath)
+  if (data === null) {
+    error(`${settingsPath} exists but is not valid JSON — not touching it.`)
+    log('  Fix the file, then re-run setup, or add this to its "env" block yourself:')
+    log(`    ${c.cyan}"NEXUSMIND_API_KEY": "${apiKey || '<key>'}", "NEXUSMIND_BASE_URL": "${baseUrl}"${c.reset}`)
+    return false
+  }
+  const env = (data.env as Record<string, unknown>) ?? {}
+  if (apiKey) env['NEXUSMIND_API_KEY'] = apiKey
+  env['NEXUSMIND_BASE_URL'] = baseUrl
+  data.env = env
+  writeJson(settingsPath, data) // writeJson mkdir -p's the parent dir
+  success(`Env vars → ${settingsPath}`)
+  return true
+}
+
+// spawnSync-shaped dependency, injectable so tests can stub process execution
+// without spawning a real `claude` CLI — same convention used throughout the
+// Codex CLI helpers below (isCodexCliAvailable, registerCodexMcp).
+type SpawnFn = typeof spawnSync
+
+function isClaudeCliAvailable(spawn: SpawnFn = spawnSync): boolean {
+  try {
+    const res = spawn('claude', ['--version'], { stdio: 'ignore', shell: process.platform === 'win32' })
+    return !res.error && res.status === 0
+  } catch {
+    return false
+  }
+}
+
+// Actually installs the NexusMind Claude Code plugin (marketplace + plugin),
+// instead of merely printing the two commands for the user to run by hand.
+// stdio: 'inherit' so a marketplace trust prompt (Claude Code may ask the user
+// to confirm trusting a new marketplace source) reaches the user's terminal
+// instead of hanging silently. Both subcommands are verified, non-interactive
+// Claude Code CLI commands: `claude plugin marketplace add <source> --scope
+// user` and `claude plugin install <plugin@marketplace> --scope user`.
+export function installNexusmindPlugin(spawn: SpawnFn = spawnSync): boolean {
+  try {
+    const marketplaceRes = spawn(
+      'claude',
+      ['plugin', 'marketplace', 'add', GITHUB_REPO, '--scope', 'user'],
+      { stdio: 'inherit', shell: process.platform === 'win32' },
+    )
+    if (marketplaceRes.error || marketplaceRes.status !== 0) return false
+
+    const installRes = spawn(
+      'claude',
+      ['plugin', 'install', PLUGIN_KEY, '--scope', 'user'],
+      { stdio: 'inherit', shell: process.platform === 'win32' },
+    )
+    if (installRes.error || installRes.status !== 0) return false
+
+    return true
+  } catch {
+    return false
+  }
+}
+
+// All file paths and the spawn dependency are injectable — defaulting to the
+// real per-user locations / real spawnSync — purely for test isolation (see
+// setup.test.ts). Production callers use the defaults.
+export function installClaudeCode(
+  apiKey: string,
+  baseUrl: string,
+  opts: {
+    spawn?: SpawnFn
+    claudeJsonPath?: string
+    claudeSettingsPath?: string
+    installedPluginsPath?: string
+    rcFiles?: string[]
+  } = {},
+) {
+  const {
+    spawn = spawnSync,
+    claudeJsonPath = CLAUDE_JSON_PATH,
+    claudeSettingsPath = CLAUDE_SETTINGS,
+    installedPluginsPath = INSTALLED_PLUGINS_JSON,
+    rcFiles = DEFAULT_RC_FILES(),
+  } = opts
+
   // Clean up stale absolute-path hooks from old installs
-  const settings = readJson(CLAUDE_SETTINGS)
+  const settings = readJson(claudeSettingsPath)
   const hooks = (settings.hooks as Record<string, unknown[]>) ?? {}
   let cleaned = false
   for (const event of Object.keys(hooks)) {
@@ -266,34 +374,113 @@ function installClaudeCode(apiKey: string, baseUrl: string) {
   }
   if (cleaned) {
     settings.hooks = hooks
-    writeJson(CLAUDE_SETTINGS, settings)
+    writeJson(claudeSettingsPath, settings)
     info('Removed stale hooks from previous install')
   }
 
-  writeEnvVars(apiKey, baseUrl)
+  // Two separate env destinations, both needed:
+  //  • shell rc files — still serve Cursor and plain-CLI usage (no-op when the
+  //    rc files don't exist, which is common).
+  //  • ~/.claude/settings.json `env` — the only thing that makes the PLUGIN's
+  //    .mcp.json ${NEXUSMIND_*} placeholders resolve. Written BEFORE any decision
+  //    to drop the legacy literal-valued ~/.claude.json entry, because that entry
+  //    is the user's only working registration until this block exists.
+  writeEnvVars(apiKey, baseUrl, rcFiles)
+  const envWritten = writeClaudeSettingsEnv(apiKey, baseUrl, claudeSettingsPath)
 
-  if (isNexusmindPluginInstalled()) {
+  if (isNexusmindPluginInstalled(installedPluginsPath)) {
     success('NexusMind plugin detected — MCP registration is handled by the plugin')
     // A direct ~/.claude.json entry (old setup, or a previous fallback install)
-    // duplicates the plugin's own registration.
-    if (hasLegacyClaudeJsonEntry()) {
-      warn(`Duplicate MCP registration detected in ${CLAUDE_JSON_PATH}`)
-      log('  The plugin already registers NexusMind, so the direct `mcpServers.nexusmind`')
-      log('  entry causes tools to load twice. Remove it with:')
-      log(`    ${c.cyan}claude mcp remove nexusmind${c.reset}`)
+    // duplicates the plugin's own registration. WARN ONLY — do not delete it.
+    // isNexusmindPluginInstalled() trusts installed_plugins.json, which records
+    // what was installed, not that it still works; a stale or broken record
+    // still returns true. Deleting the direct entry on that evidence alone could
+    // strip the user's ONLY working MCP registration and leave them with none.
+    // The removal is only safe on the branch below, where we installed the
+    // plugin ourselves in this run and watched it succeed.
+    const hasDirectEntry = hasLegacyClaudeJsonEntry(claudeJsonPath)
+
+    if (envWritten) {
+      // The plugin can resolve its credentials, so a direct entry really is a
+      // redundant duplicate — advise removing it (but never delete it here; the
+      // installed-plugins record alone is not proof the plugin still works).
+      if (hasDirectEntry) {
+        warn(`Duplicate MCP registration detected in ${claudeJsonPath}`)
+        log('  The plugin already registers NexusMind, so the direct `mcpServers.nexusmind`')
+        log('  entry causes tools to load twice. Remove it with:')
+        log(`    ${c.cyan}claude mcp remove nexusmind${c.reset}`)
+      }
+      return
     }
-  } else {
-    info('NexusMind plugin not installed — registering the MCP server directly')
-    if (writeClaudeJsonMcpEntry(apiKey, baseUrl)) {
-      success(`MCP server → ${CLAUDE_JSON_PATH}`)
+
+    // No env block: the plugin's ${NEXUSMIND_*} placeholders resolve to nothing,
+    // so the direct entry is not a duplicate — it is the only thing that works.
+    // Never advise removing it here, and if it is missing, write it: setup must
+    // never return leaving the user with zero working MCP registrations.
+    warn(`The env block could not be written to ${claudeSettingsPath}.`)
+    log('  The plugin\'s ${NEXUSMIND_API_KEY} / ${NEXUSMIND_BASE_URL} placeholders cannot resolve without it,')
+    log(`  so MCP credentials rely on a direct entry in ${claudeJsonPath}.`)
+    if (hasDirectEntry) {
+      info(`Keeping the existing direct entry in ${claudeJsonPath} — it holds the only working credentials.`)
+    } else if (writeClaudeJsonMcpEntry(apiKey, baseUrl, claudeJsonPath)) {
+      success(`MCP server → ${claudeJsonPath}`)
     }
-    log('')
-    log('  Optional: the plugin adds hooks and slash commands on top of the MCP server.')
-    log('  To upgrade later, inside Claude Code run:')
-    log(`    ${c.cyan}/plugin marketplace add ${GITHUB_REPO}${c.reset}`)
-    log(`    ${c.cyan}/plugin install ${PLUGIN_KEY}${c.reset}`)
-    log(`  then remove the direct entry: ${c.cyan}claude mcp remove nexusmind${c.reset}`)
+    return
   }
+
+  if (isClaudeCliAvailable(spawn)) {
+    info('Installing the NexusMind Claude Code plugin…')
+    if (installNexusmindPlugin(spawn)) {
+      // Dropping the direct ~/.claude.json entry is safe on TWO conditions, both
+      // of which must hold: (1) the plugin was just installed successfully in
+      // THIS run, so its registration is known-good, and (2) the env block was
+      // written, so the plugin's ${NEXUSMIND_*} placeholders can actually
+      // resolve. Only then is the plugin a complete replacement for the entry.
+      if (envWritten) {
+        success('NexusMind plugin installed — hooks, MCP server, and skills are now active')
+        if (removeLegacyClaudeJsonEntry(claudeJsonPath)) {
+          info(`Removed the now-duplicate MCP registration from ${claudeJsonPath} (the plugin registers NexusMind itself)`)
+        }
+        return
+      }
+
+      // Degraded: the plugin is installed (so hooks DO work), but its
+      // ${NEXUSMIND_API_KEY} / ${NEXUSMIND_BASE_URL} placeholders cannot resolve
+      // because the env block could not be written. The MCP server therefore
+      // needs a literal-valued direct entry to work at all. Never report plain
+      // success here, and never return without at least one working registration.
+      warn(`Plugin installed (hooks are active), but the env block could not be written to ${claudeSettingsPath}.`)
+      log('  The plugin\'s ${NEXUSMIND_API_KEY} / ${NEXUSMIND_BASE_URL} placeholders cannot resolve without it,')
+      log(`  so MCP credentials fall back to a direct entry in ${claudeJsonPath}.`)
+      if (hasLegacyClaudeJsonEntry(claudeJsonPath)) {
+        info(`Keeping the existing direct entry in ${claudeJsonPath} — it holds the only working credentials.`)
+      } else if (writeClaudeJsonMcpEntry(apiKey, baseUrl, claudeJsonPath)) {
+        success(`MCP server → ${claudeJsonPath}`)
+      }
+      return
+    }
+    warn('Plugin install failed — falling back to a direct MCP registration (no lifecycle hooks).')
+  } else {
+    info('claude CLI not found on PATH — registering the MCP server directly')
+  }
+
+  installClaudeCodeFallback(apiKey, baseUrl, claudeJsonPath)
+}
+
+// Fallback used when the `claude` CLI is unavailable or the plugin install
+// fails: register the MCP server directly (as before 0.8.3), and point the
+// user at the manual plugin-install commands. Without the plugin there are NO
+// lifecycle hooks (session-start/stop/etc.) — only the MCP tools are available.
+function installClaudeCodeFallback(apiKey: string, baseUrl: string, claudeJsonPath: string) {
+  if (writeClaudeJsonMcpEntry(apiKey, baseUrl, claudeJsonPath)) {
+    success(`MCP server → ${claudeJsonPath}`)
+  }
+  log('')
+  warn('Without the plugin, Claude Code has no lifecycle hooks — only the MCP tools are available.')
+  log('  To install the plugin manually, inside Claude Code run:')
+  log(`    ${c.cyan}/plugin marketplace add ${GITHUB_REPO}${c.reset}`)
+  log(`    ${c.cyan}/plugin install ${PLUGIN_KEY}${c.reset}`)
+  log(`  then remove the direct entry: ${c.cyan}claude mcp remove nexusmind${c.reset}`)
 }
 
 function installCursor(apiKey: string, baseUrl: string, scope: 'global' | 'project') {
