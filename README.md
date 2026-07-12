@@ -164,6 +164,29 @@ and manage sprints. All permission-gated backend-side (`task:read` / `task:write
 
 ---
 
+## SDD artifact tools
+
+The spec-driven-development artifact store — the proposal, spec, design, tasks, and report
+documents of an OpenSpec change, kept in NexusMind rather than only in a git checkout, so a
+sub-agent on any machine can read the **full** document of a previous phase. Exactly seven
+tools, all permission-gated backend-side (`sdd:read` / `sdd:write`); the MCP server adds no
+client-side authority.
+
+| Tool | Description |
+|------|-------------|
+| `save_sdd_artifact` | Persist an SDD document (creating the change if unknown). **Idempotent by content hash** — re-saving byte-identical content creates no revision, so every `sdd-*` skill can call it unconditionally. `sdd:write`. |
+| `get_sdd_artifact` | Fetch a document by artifact id or by `(project, change_name, kind, capability?)` and return its **FULL content — never a preview**. Defaults to the latest revision; accepts an explicit `revision`. A missing artifact reports not-found, never an empty document. `sdd:read`. |
+| `list_sdd_changes` | List changes with phase and status, filterable by `project` / `status` / `phase` / `sprint_id`. Metadata only — never artifact content. Powers `/sdd-status`. `sdd:read`. |
+| `get_sdd_change` | One change plus its artifact inventory, linked tasks, and linked memories. The inventory **is** the recoverable DAG state — powers `/sdd-continue` with no checkout. `sdd:read`. |
+| `update_sdd_change` | Patch a change's `phase` / `status` / `title` / `sprint_id`. An invalid phase is rejected atomically; an unknown change reports not-found and is never created as a side effect. `sdd:write`. |
+| `search_sdd_artifacts` | Full-text search across every change in the org; returns snippets plus the natural key to pass to `get_sdd_artifact`. `sdd:read`. |
+| `link_sdd_change_memory` | Tie a memory (decision, bugfix, discovery) back to the change that produced it — called by `sdd-apply` / `sdd-verify`. Idempotent per `(change, memory)` pair. `sdd:write`. |
+
+There is deliberately no `create_sdd_change` (the save **is** the create) and no
+`delete_sdd_change` (archival is admin/API-only).
+
+---
+
 ## Manual configuration
 
 ### Claude Code

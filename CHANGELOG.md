@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.0
+
+### Added
+
+- **Seven SDD artifact tools** (`sdd-artifacts` change, PR-6) — the spec-driven-development
+  document store as MCP tools. Additive; no existing tool changed.
+
+  | Tool | Permission | Notes |
+  |------|-----------|-------|
+  | `save_sdd_artifact` | `sdd:write` | The write path. **Idempotent by content hash**: re-saving byte-identical content creates **no** revision, so every `sdd-*` skill may call it unconditionally on each phase run; edited content appends one. Creates the change when it does not exist — the save *is* the create. Content over 1 MB fails the call and writes nothing. |
+  | `get_sdd_artifact` | `sdd:read` | The cross-phase read. Returns the **FULL document, never a preview** — `sdd-design` reads the proposal, `sdd-tasks` reads the spec + design. Addressable by artifact id or by `(project, change_name, kind, capability?)`; defaults to the latest revision and accepts an explicit one. A missing artifact reports not-found, never an empty string a caller could mistake for an empty design. |
+  | `list_sdd_changes` | `sdd:read` | Metadata only, never content. Powers `/sdd-status`. |
+  | `get_sdd_change` | `sdd:read` | The artifact inventory *is* the recoverable DAG state — resume a change with no checkout. Powers `/sdd-continue`. |
+  | `update_sdd_change` | `sdd:write` | Phase/status transitions. An invalid phase is rejected atomically; an unknown change reports not-found and is never created as a side effect. |
+  | `search_sdd_artifacts` | `sdd:read` | FTS across every change in the org; hits carry the natural key to feed straight to `get_sdd_artifact`. |
+  | `link_sdd_change_memory` | `sdd:write` | Ties the decisions `sdd-apply` / `sdd-verify` record back to the change. Idempotent per `(change, memory)` pair. |
+
+  All seven are thin wrappers over `/v1/sdd/*` and add **no authority** beyond the calling
+  API key's existing `sdd:*` grants — the backend enforces, the tools only surface a denial
+  as a tool failure. There is no `create_sdd_change` (the save is the create) and no
+  `delete_sdd_change` (archival is admin/API-only).
+
 ## 0.8.3
 
 ### Fixed

@@ -1678,3 +1678,260 @@ export function createSprintRetrospective(
     { method: 'POST', body: JSON.stringify(body) },
   )
 }
+
+// ── SDD Artifacts ────────────────────────────────────────────────────────────
+//
+// Thin wrappers over the backend SDD API (openspec/changes/sdd-artifacts,
+// design.md §4). Every fn is a straight `request<T>()` call — no client-side
+// resolution, no caching, no content truncation. The store is the source of
+// truth for a change's spec-driven-development artifacts, so an agent on a
+// machine with no checkout can read a proposal/spec/design/tasks document in
+// full.
+//
+// Two contracts worth stating here because they shape the callers:
+//   * `PUT /v1/sdd/artifacts` is idempotent by content hash and returns **200
+//     always, never 201**. "Was a revision created?" is a body flag
+//     (`created_revision`), not an HTTP status.
+//   * A missing artifact is a **404**, never a 200 carrying an empty document —
+//     an agent must be able to tell "no design yet" from "an empty design".
+
+/** SDD lifecycle phase. Advisory ordering; the artifact inventory is the real state. */
+export type SddPhase = 'explore' | 'propose' | 'spec' | 'design' | 'tasks' | 'apply' | 'verify' | 'archive'
+
+export type SddStatus = 'active' | 'archived' | 'abandoned'
+
+export type SddArtifactKind =
+  | 'exploration' | 'proposal' | 'spec' | 'design' | 'tasks'
+  | 'apply-progress' | 'verify-report' | 'archive-report' | 'state'
+
+export type SddMemoryRelation = 'produced' | 'informed'
+
+/** A change — one `openspec/changes/{name}/` folder. Never carries artifact content. */
+export interface SddChange {
+  id: string
+  org_id: string
+  project: string
+  name: string
+  title?: string
+  status: string
+  phase: string
+  repo_url?: string
+  repo_ref?: string
+  sprint_id?: string
+  created_by: string
+  created_at: string
+  updated_at: string
+  archived_at?: string | null
+  /** Hydrated on the detail read only. Metadata only — no content, by design. */
+  artifacts?: SddArtifact[]
+  task_links?: Task[]
+  memory_links?: Memory[]
+}
+
+/** One artifact file within a change. Carries NO content — content lives in revisions. */
+export interface SddArtifact {
+  id: string
+  change_id: string
+  kind: string
+  /** Empty string for every kind except `spec`. Never null. */
+  capability: string
+  path?: string
+  latest_revision: number
+  created_at: string
+  updated_at: string
+}
+
+/** An artifact plus the FULL content of its latest revision (the backend flattens the artifact in). */
+export interface SddArtifactDetail extends SddArtifact {
+  change_name: string
+  project: string
+  content?: string
+  content_hash?: string
+}
+
+/** A full, immutable revision — with content. */
+export interface SddRevision {
+  id: string
+  artifact_id: string
+  revision: number
+  content: string
+  content_hash: string
+  byte_size: number
+  git_commit?: string
+  git_path?: string
+  source: string
+  created_by: string
+  created_at: string
+}
+
+/** Revision metadata. Has no `content` field on purpose — it cannot leak a document. */
+export interface SddRevisionMeta {
+  id: string
+  artifact_id: string
+  revision: number
+  content_hash: string
+  byte_size: number
+  git_commit?: string
+  git_path?: string
+  source: string
+  created_by: string
+  created_at: string
+}
+
+/** An FTS5 hit — a snippet plus the natural key needed to fetch the full document. */
+export interface SddSearchHit {
+  artifact_id: string
+  change_id: string
+  change_name: string
+  project: string
+  kind: string
+  capability: string
+  snippet: string
+}
+
+export interface SaveSddArtifactInput {
+  project: string
+  change_name: string
+  kind: string
+  capability?: string
+  content: string
+  path?: string
+  git_commit?: string
+  git_ref?: string
+}
+
+/** `PUT /v1/sdd/artifacts` response. 200 always — `created_revision` carries the news. */
+export interface SaveSddArtifactResponse {
+  artifact: SddArtifact
+  created_revision: boolean
+}
+
+export interface SddArtifactKey {
+  project: string
+  change_name: string
+  kind: string
+  capability?: string
+}
+
+export interface ListSddChangesInput {
+  project?: string
+  status?: string
+  phase?: string
+  sprint_id?: string
+  include_archived?: boolean
+}
+
+export interface UpdateSddChangeInput {
+  title?: string
+  status?: string
+  phase?: string
+  sprint_id?: string
+}
+
+export interface LinkSddChangeMemoryInput {
+  memory_id: string
+  relation?: SddMemoryRelation
+}
+
+/**
+ * The write path. Idempotent by content hash: re-saving byte-identical content
+ * creates no revision. Creates the change when it does not exist. 200 always.
+ */
+export function saveSddArtifact(input: SaveSddArtifactInput): Promise<SaveSddArtifactResponse> {
+  const body: Record<string, unknown> = {
+    project: input.project,
+    change_name: input.change_name,
+    kind: input.kind,
+    content: input.content,
+  }
+  if (input.capability  !== undefined) body.capability  = input.capability
+  if (input.path        !== undefined) body.path        = input.path
+  if (input.git_commit  !== undefined) body.git_commit  = input.git_commit
+  if (input.git_ref     !== undefined) body.git_ref     = input.git_ref
+  return request<SaveSddArtifactResponse>('/v1/sdd/artifacts', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+/** By id → the artifact plus the FULL content of its latest revision. */
+export function getSddArtifact(artifactId: string): Promise<SddArtifactDetail> {
+  return request<SddArtifactDetail>(`/v1/sdd/artifacts/${encodeURIComponent(artifactId)}`)
+}
+
+/**
+ * The natural-key read — a real backend route, not client-side resolution. How an
+ * agent fetches "the design of change X" knowing only the change name and kind.
+ */
+export function getSddArtifactByKey(key: SddArtifactKey): Promise<SddArtifactDetail> {
+  const qs = new URLSearchParams()
+  qs.set('project',     key.project)
+  qs.set('change_name', key.change_name)
+  qs.set('kind',        key.kind)
+  if (key.capability !== undefined) qs.set('capability', key.capability)
+  return request<SddArtifactDetail>(`/v1/sdd/artifacts?${qs.toString()}`)
+}
+
+/** Revision metadata only — the response type physically cannot carry content. */
+export function listSddArtifactRevisions(artifactId: string): Promise<SddRevisionMeta[]> {
+  return request<SddRevisionMeta[]>(`/v1/sdd/artifacts/${encodeURIComponent(artifactId)}/revisions`)
+}
+
+/** One historical revision, with its full content. */
+export function getSddArtifactRevision(artifactId: string, revision: number): Promise<SddRevision> {
+  return request<SddRevision>(
+    `/v1/sdd/artifacts/${encodeURIComponent(artifactId)}/revisions/${encodeURIComponent(String(revision))}`,
+  )
+}
+
+/** Metadata only, never content. */
+export function listSddChanges(input: ListSddChangesInput = {}): Promise<SddChange[]> {
+  const qs = new URLSearchParams()
+  if (input.project)          qs.set('project',          input.project)
+  if (input.status)           qs.set('status',           input.status)
+  if (input.phase)            qs.set('phase',            input.phase)
+  if (input.sprint_id)        qs.set('sprint_id',        input.sprint_id)
+  if (input.include_archived) qs.set('include_archived', 'true')
+  const query = qs.toString()
+  return request<SddChange[]>(query ? `/v1/sdd/changes?${query}` : '/v1/sdd/changes')
+}
+
+/** Hydrated: artifact inventory (no content) + linked tasks + linked memories. */
+export function getSddChange(changeId: string): Promise<SddChange> {
+  return request<SddChange>(`/v1/sdd/changes/${encodeURIComponent(changeId)}`)
+}
+
+/**
+ * Phase/status transitions. `project` and `name` are deliberately not patchable —
+ * the backend `deny_unknown_fields` rejects them with a 422 rather than silently
+ * no-op'ing a rename that would orphan every task linked by name.
+ */
+export function updateSddChange(changeId: string, input: UpdateSddChangeInput): Promise<SddChange> {
+  const body: Record<string, unknown> = {}
+  if (input.title     !== undefined) body.title     = input.title
+  if (input.status    !== undefined) body.status    = input.status
+  if (input.phase     !== undefined) body.phase     = input.phase
+  if (input.sprint_id !== undefined) body.sprint_id = input.sprint_id
+  return request<SddChange>(`/v1/sdd/changes/${encodeURIComponent(changeId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+/** FTS across every change in the caller's org — snippets, never whole documents. */
+export function searchSddArtifacts(q: string, limit?: number): Promise<SddSearchHit[]> {
+  const qs = new URLSearchParams()
+  qs.set('q', q)
+  if (limit !== undefined) qs.set('limit', String(limit))
+  return request<SddSearchHit[]>(`/v1/sdd/search?${qs.toString()}`)
+}
+
+/** Idempotent for a (change, memory) pair. Returns the change's linked memories. */
+export function linkSddChangeMemory(changeId: string, input: LinkSddChangeMemoryInput): Promise<Memory[]> {
+  const body: Record<string, unknown> = { memory_id: input.memory_id }
+  if (input.relation !== undefined) body.relation = input.relation
+  return request<Memory[]>(`/v1/sdd/changes/${encodeURIComponent(changeId)}/memories`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}

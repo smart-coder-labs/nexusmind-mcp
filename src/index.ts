@@ -28,8 +28,8 @@ if (process.argv[2] === 'smoke') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective } from './client.js'
-import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget, Task, TaskComment, TaskAssignee, Sprint, SprintRetrospective, TaskStatus, TaskPriority, SprintStatus } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective, saveSddArtifact, getSddArtifact, getSddArtifactByKey, getSddArtifactRevision, listSddChanges, getSddChange, updateSddChange, searchSddArtifacts, linkSddChangeMemory } from './client.js'
+import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget, Task, TaskComment, TaskAssignee, Sprint, SprintRetrospective, TaskStatus, TaskPriority, SprintStatus, SddChange, SddArtifact, SddArtifactDetail, SddSearchHit } from './client.js'
 import { planInstall } from './harness/plan.js'
 import { applyPlan } from './harness/materialize.js'
 import { resolveDestinationRoot } from './harness/resolver.js'
@@ -3290,6 +3290,345 @@ server.tool(
       const sprint = await createSprint(input)
       return { content: [{ type: 'text', text: `Sprint created.\n${formatSprint(sprint)}` }] }
     } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// ── SDD Artifacts ────────────────────────────────────────────────────────────
+//
+// Exactly SEVEN tools — thin permissioned wrappers over the backend SDD API
+// (design.md §4/§6). They add NO authority beyond the caller's existing `sdd:*`
+// grants on their Bearer key: the backend enforces, these tools only surface a
+// denial as `isError: true` with the backend's text. There is deliberately no
+// `create_sdd_change` (the save IS the create) and no `delete_sdd_change`
+// (archival is admin/API-only).
+//
+// The load-bearing one is `get_sdd_artifact`: it returns the FULL document. The
+// old path — mem_search → mem_get_observation — hands a sub-agent a truncated
+// preview it has to hope is complete. Nothing here truncates, elides, or
+// summarizes, and a missing artifact reports not-found rather than an empty
+// string a caller could mistake for an empty design.
+
+const sddPhaseEnum = z.enum(['explore', 'propose', 'spec', 'design', 'tasks', 'apply', 'verify', 'archive'])
+const sddStatusEnum = z.enum(['active', 'archived', 'abandoned'])
+const sddKindEnum = z.enum([
+  'exploration', 'proposal', 'spec', 'design', 'tasks',
+  'apply-progress', 'verify-report', 'archive-report', 'state',
+])
+const sddRelationEnum = z.enum(['produced', 'informed'])
+
+/** `spec` artifacts are per-capability; every other kind uses the `''` sentinel. */
+function sddKindLabel(kind: string, capability?: string): string {
+  return capability ? `${kind}/${capability}` : kind
+}
+
+/** Branches on `created_revision` and always names the revision the artifact is now at. */
+function formatSddArtifact(
+  artifact: SddArtifact,
+  createdRevision: boolean,
+  project: string,
+  changeName: string,
+): string {
+  const what = sddKindLabel(artifact.kind, artifact.capability)
+  const head = createdRevision
+    ? `Saved ${what} for change "${changeName}" (${project}) — revision ${artifact.latest_revision} created.`
+    : `Content unchanged — no new revision created. ${what} for change "${changeName}" (${project}) is still at revision ${artifact.latest_revision}.`
+  const lines = [head, `Artifact id: ${artifact.id}`, `Change id: ${artifact.change_id}`]
+  if (artifact.path) lines.push(`Path: ${artifact.path}`)
+  return lines.join('\n')
+}
+
+/** Metadata only — this helper must never be given a place to put content. */
+function formatSddChangeLine(c: SddChange): string {
+  const title = c.title ? ` — ${c.title}` : ''
+  const sprint = c.sprint_id ? ` sprint:${c.sprint_id}` : ''
+  const archived = c.archived_at ? ' (archived)' : ''
+  return `• [${c.id}] ${c.name}${title} — phase: ${c.phase}, status: ${c.status} (${c.project})${sprint}${archived}`
+}
+
+function formatSddChangeList(changes: SddChange[]): string {
+  if (changes.length === 0) return 'No SDD changes found.'
+  return changes.map(formatSddChangeLine).join('\n')
+}
+
+/**
+ * The artifact inventory IS the recoverable DAG state — it reports what actually
+ * exists, independently of the advisory `phase`. Content is never inlined; fetch
+ * a document with `get_sdd_artifact`.
+ */
+function formatSddChange(c: SddChange): string {
+  const lines = [
+    `Change ${c.id}: ${c.name} (${c.project})`,
+    ...(c.title ? [`Title: ${c.title}`] : []),
+    `Phase: ${c.phase}   Status: ${c.status}`,
+    ...(c.sprint_id ? [`Sprint: ${c.sprint_id}`] : []),
+    ...(c.archived_at ? [`Archived: ${c.archived_at}`] : []),
+  ]
+
+  const artifacts = c.artifacts ?? []
+  lines.push('', `Artifacts (${artifacts.length}) — metadata only; call get_sdd_artifact for full content:`)
+  if (artifacts.length === 0) {
+    lines.push('  (none)')
+  } else {
+    for (const a of artifacts) {
+      const path = a.path ? ` — ${a.path}` : ''
+      lines.push(`  • ${sddKindLabel(a.kind, a.capability)} — revision ${a.latest_revision} [${a.id}]${path}`)
+    }
+  }
+
+  const tasks = c.task_links ?? []
+  lines.push('', `Linked tasks (${tasks.length}):`)
+  if (tasks.length === 0) lines.push('  (none)')
+  else for (const t of tasks) lines.push(`  • [${t.id}] ${t.title} — ${t.status}`)
+
+  const memories = c.memory_links ?? []
+  lines.push('', `Linked memories (${memories.length}):`)
+  if (memories.length === 0) lines.push('  (none)')
+  else for (const m of memories) lines.push(`  • [${m.id}] ${m.title ?? m.content.split('\n')[0]}`)
+
+  return lines.join('\n')
+}
+
+function formatSddSearchHits(hits: SddSearchHit[], query: string): string {
+  if (hits.length === 0) return `No SDD artifacts matched "${query}".`
+  const lines = [`${hits.length} SDD artifact(s) matched "${query}" — pass the change name + kind (+ capability) to get_sdd_artifact for the full document:`]
+  for (const h of hits) {
+    lines.push(`• ${sddKindLabel(h.kind, h.capability)} in change "${h.change_name}" (${h.project}) [artifact ${h.artifact_id}]`)
+    lines.push(`    ${h.snippet.replace(/\n/g, ' ')}`)
+  }
+  return lines.join('\n')
+}
+
+function isNotFound(err: unknown): boolean {
+  return (err as { status?: number }).status === 404
+}
+
+/** Resolves `(project, change_name)` to a change id via the list route. */
+async function resolveSddChangeId(project: string, changeName: string): Promise<string | undefined> {
+  const changes = await listSddChanges({ project, include_archived: true })
+  return changes.find(c => c.name === changeName)?.id
+}
+
+// save_sdd_artifact
+server.tool(
+  'save_sdd_artifact',
+  'Persist an SDD document (proposal, spec, design, tasks, apply-progress, verify-report, archive-report, exploration, state) to the NexusMind artifact store, creating the change if it does not exist. Call it at the end of every sdd-* skill phase — it is idempotent by content hash, so re-saving byte-identical content creates NO new revision and you may call it freely on every phase run; edited content appends a revision. Requires sdd:write on the project; a backend rejection (missing permission, unknown kind, content over the 1 MB cap) fails the tool call and writes nothing rather than reporting success.',
+  {
+    project:     z.string().describe('Project the change belongs to (e.g. "nexus-mind")'),
+    change_name: z.string().describe('openspec change folder name, kebab-case (e.g. "sdd-artifacts"). Created if unknown.'),
+    kind:        sddKindEnum.describe('Artifact kind — which SDD document this is'),
+    capability:  z.string().optional().describe('Capability name — required for kind "spec" (one spec artifact per capability), omitted for every other kind'),
+    content:     z.string().describe('The FULL document text. Max 1 MB; oversized content is rejected and nothing is written.'),
+    path:        z.string().optional().describe('Repo-relative path the document lives at (e.g. "openspec/changes/x/design.md")'),
+    git_commit:  z.string().optional().describe('Git commit SHA this revision came from'),
+    git_ref:     z.string().optional().describe('Git ref (branch) this revision came from'),
+  },
+  async (input) => {
+    try {
+      const { artifact, created_revision } = await saveSddArtifact(input)
+      return {
+        content: [{ type: 'text', text: formatSddArtifact(artifact, created_revision, input.project, input.change_name) }],
+      }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// get_sdd_artifact
+server.tool(
+  'get_sdd_artifact',
+  'Fetch an SDD document and return the FULL text — this is the cross-phase read (sdd-design reads the proposal; sdd-tasks reads the spec + design; sdd-apply reads tasks.md), and it never truncates, previews, or summarizes. Address it by artifact_id, or by natural key (project + change_name + kind, plus capability for a spec); defaults to the latest revision and accepts an explicit revision number. Requires sdd:read; an artifact that does not exist — or that belongs to another organization — reports not-found and returns no content, never an empty document.',
+  {
+    artifact_id: z.string().optional().describe('Artifact id. Alternative to the natural key below.'),
+    project:     z.string().optional().describe('Project name (natural key; required with change_name + kind)'),
+    change_name: z.string().optional().describe('openspec change folder name (natural key)'),
+    kind:        sddKindEnum.optional().describe('Artifact kind (natural key)'),
+    capability:  z.string().optional().describe('Capability name — disambiguates which "spec" artifact; omit for every other kind'),
+    revision:    z.number().int().min(1).optional().describe('Explicit revision number. Omit for the latest revision.'),
+  },
+  async ({ artifact_id, project, change_name, kind, capability, revision }) => {
+    try {
+      let detail: SddArtifactDetail
+      if (artifact_id) {
+        detail = await getSddArtifact(artifact_id)
+      } else if (project && change_name && kind) {
+        detail = await getSddArtifactByKey({ project, change_name, kind, capability })
+      } else {
+        return {
+          content: [{ type: 'text', text: 'Error: provide either artifact_id, or all of project + change_name + kind.' }],
+          isError: true,
+        }
+      }
+
+      let content = detail.content
+      let revisionNumber = detail.latest_revision
+      if (revision !== undefined && revision !== detail.latest_revision) {
+        const rev = await getSddArtifactRevision(detail.id, revision)
+        content = rev.content
+        revisionNumber = rev.revision
+      }
+
+      // Never hand back an empty string a caller could mistake for an empty document.
+      if (content == null) {
+        return {
+          content: [{ type: 'text', text: `Not found: artifact ${detail.id} has no content at revision ${revisionNumber}. This is a missing document, NOT an empty one.` }],
+          isError: true,
+        }
+      }
+
+      const header = `Artifact ${detail.id} — ${sddKindLabel(detail.kind, detail.capability)} of change "${detail.change_name}" (${detail.project}), revision ${revisionNumber} of ${detail.latest_revision}. Full content follows (untruncated):`
+      return { content: [{ type: 'text', text: `${header}\n\n${content}` }] }
+    } catch (err) {
+      if (isNotFound(err)) {
+        const what = artifact_id
+          ? `artifact ${artifact_id}`
+          : `${kind}${capability ? `/${capability}` : ''} for change "${change_name}" in project "${project}"`
+        return {
+          content: [{ type: 'text', text: `Not found: no ${what}${revision !== undefined ? ` at revision ${revision}` : ''}. The artifact does not exist (or is not visible to this API key) — this is NOT an empty document.` }],
+          isError: true,
+        }
+      }
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// list_sdd_changes — powers /sdd-status
+server.tool(
+  'list_sdd_changes',
+  'List SDD changes with their phase and status — this powers `/sdd-status`. Call it to see what changes are in flight across a project, a phase, or a sprint. Requires sdd:read. Returns metadata only and never artifact content: use get_sdd_change for one change\'s artifact inventory, and get_sdd_artifact for a document.',
+  {
+    project:          z.string().optional().describe('Filter to a project'),
+    status:           sddStatusEnum.optional().describe('Filter by lifecycle status'),
+    phase:            sddPhaseEnum.optional().describe('Filter by SDD phase'),
+    sprint_id:        z.string().optional().describe('Filter to changes attached to a sprint'),
+    include_archived: z.boolean().optional().describe('Include archived changes (default false)'),
+  },
+  async (input) => {
+    try {
+      const changes = await listSddChanges(input)
+      return { content: [{ type: 'text', text: formatSddChangeList(changes) }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// get_sdd_change — powers /sdd-continue
+server.tool(
+  'get_sdd_change',
+  'Fetch one SDD change with its artifact inventory (each artifact\'s kind, capability, path and latest revision), its linked tasks and its linked memories. The artifact inventory IS the recoverable DAG state — call this to resume a change with no local checkout (it powers `/sdd-continue`), and trust the inventory over the advisory `phase` field when they disagree. Address it by change_id or by project + change_name. Requires sdd:read. Lists artifacts but never inlines their content — fetch a document with get_sdd_artifact.',
+  {
+    change_id:   z.string().optional().describe('Change id. Alternative to project + change_name.'),
+    project:     z.string().optional().describe('Project name (required with change_name)'),
+    change_name: z.string().optional().describe('openspec change folder name (required with project)'),
+  },
+  async ({ change_id, project, change_name }) => {
+    try {
+      let id = change_id
+      if (!id) {
+        if (!project || !change_name) {
+          return {
+            content: [{ type: 'text', text: 'Error: provide either change_id, or both project and change_name.' }],
+            isError: true,
+          }
+        }
+        id = await resolveSddChangeId(project, change_name)
+        if (!id) {
+          return {
+            content: [{ type: 'text', text: `Not found: no change named "${change_name}" in project "${project}".` }],
+            isError: true,
+          }
+        }
+      }
+      const change = await getSddChange(id)
+      return { content: [{ type: 'text', text: formatSddChange(change) }] }
+    } catch (err) {
+      if (isNotFound(err)) {
+        return {
+          content: [{ type: 'text', text: `Not found: no SDD change ${change_id ?? `"${change_name}" in project "${project}"`} is visible to this API key.` }],
+          isError: true,
+        }
+      }
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// update_sdd_change
+server.tool(
+  'update_sdd_change',
+  'Transition an SDD change\'s phase or status (and optionally its title or sprint) — call it when a phase completes, e.g. advancing tasks → apply. Requires sdd:write. The identity tuple (project, name) is NOT patchable. An invalid phase or status is rejected atomically: no part of the update lands, and an unknown change reports not-found rather than being created as a side effect.',
+  {
+    change_id: z.string().describe('Change id (get it from list_sdd_changes or get_sdd_change)'),
+    phase:     sddPhaseEnum.optional().describe('New SDD phase'),
+    status:    sddStatusEnum.optional().describe('New lifecycle status'),
+    title:     z.string().optional().describe('New human-readable title'),
+    sprint_id: z.string().optional().describe('Attach the change to a sprint'),
+  },
+  async ({ change_id, ...input }) => {
+    try {
+      const change = await updateSddChange(change_id, input)
+      return {
+        content: [{ type: 'text', text: `Change updated.\n${formatSddChangeLine(change)}` }],
+      }
+    } catch (err) {
+      if (isNotFound(err)) {
+        return {
+          content: [{ type: 'text', text: `Not found: no SDD change ${change_id} is visible to this API key. Nothing was created or modified.` }],
+          isError: true,
+        }
+      }
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// search_sdd_artifacts
+server.tool(
+  'search_sdd_artifacts',
+  'Full-text search the latest revision of every SDD artifact in your organization — call it to find which change already specified a topic before writing a new proposal. Search spans changes, not just the one you are working on. Requires sdd:read. Returns snippets plus the change name, kind and capability, which you pass straight to get_sdd_artifact to obtain the full document.',
+  {
+    query: z.string().describe('Full-text query (e.g. "rate limiting")'),
+    limit: z.number().int().min(1).max(50).optional().describe('Max hits to return (default 20, max 50)'),
+  },
+  async ({ query, limit }) => {
+    try {
+      const hits = await searchSddArtifacts(query, limit)
+      return { content: [{ type: 'text', text: formatSddSearchHits(hits, query) }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// link_sdd_change_memory
+server.tool(
+  'link_sdd_change_memory',
+  'Link a memory to an SDD change — called by `sdd-apply` / `sdd-verify` to tie the decisions, bugfixes and discoveries they record back to the change that produced them. Requires sdd:write. Idempotent for a (change, memory) pair: re-linking creates no duplicate, and re-linking with a different relation updates it. A memory that is not visible to the caller reports not-found and no link is written.',
+  {
+    change_id: z.string().describe('Change id'),
+    memory_id: z.string().describe('Memory id (from store_memory / record_decision)'),
+    relation:  sddRelationEnum.default('produced').describe('"produced" — the change produced this memory; "informed" — the memory informed the change'),
+  },
+  async ({ change_id, memory_id, relation }) => {
+    try {
+      const memories = await linkSddChangeMemory(change_id, { memory_id, relation })
+      const listed = memories.length > 0
+        ? `\nLinked memories (${memories.length}): ${memories.map(m => m.id).join(', ')}`
+        : ''
+      return {
+        content: [{ type: 'text', text: `Linked memory ${memory_id} to change ${change_id} (relation: ${relation}).${listed}` }],
+      }
+    } catch (err) {
+      if (isNotFound(err)) {
+        return {
+          content: [{ type: 'text', text: `Not found: memory ${memory_id} or change ${change_id} is not visible to this API key. No link was created.` }],
+          isError: true,
+        }
+      }
       return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
     }
   }
