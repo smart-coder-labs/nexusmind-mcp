@@ -966,13 +966,16 @@ test('exactly_seven_sdd_tools_are_registered', { skip }, async () => {
       assert.deepEqual(sddTools, [
         'get_sdd_artifact',
         'get_sdd_change',
+        'get_sdd_spec',
         'link_sdd_change_memory',
         'list_sdd_changes',
+        'list_sdd_specs',
         'save_sdd_artifact',
+        'save_sdd_spec',
         'search_sdd_artifacts',
         'update_sdd_change',
-      ], 'exactly seven SDD tools — no create_sdd_change, no delete_sdd_change (archival is admin/API-only)')
-      assert.equal(sddTools.length, 7)
+      ], 'ten SDD tools: the seven over openspec/changes/ plus three over openspec/specs/ — the living specification. Still no create_sdd_change and no delete_sdd_change (the save IS the create; archival is admin/API-only), and no delete_sdd_spec (a contract is not deleted by an agent).')
+      assert.equal(sddTools.length, 10)
     })
   } finally {
     await backend.close()
