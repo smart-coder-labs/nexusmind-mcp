@@ -1778,15 +1778,28 @@ export interface SddRevisionMeta {
   created_at: string
 }
 
-/** An FTS5 hit — a snippet plus the natural key needed to fetch the full document. */
+/**
+ * An FTS5 hit — a snippet plus the natural key needed to fetch the full document.
+ *
+ * `GET /v1/sdd/search` spans BOTH openspec trees, so `hit_type` is the discriminator:
+ * a `spec` hit is the living specification (`openspec/specs/{capability}/spec.md`) and
+ * has no change; an `artifact` hit is a draft inside a change and has no spec_id.
+ * Those two answers mean very different things, so the fields are optional rather
+ * than faked.
+ */
 export interface SddSearchHit {
-  artifact_id: string
-  change_id: string
-  change_name: string
+  hit_type: 'spec' | 'artifact'
   project: string
-  kind: string
   capability: string
   snippet: string
+  /** Artifact hits only. */
+  artifact_id?: string
+  change_id?: string
+  change_name?: string
+  kind?: string
+  /** Spec hits only. */
+  spec_id?: string
+  title?: string
 }
 
 export interface SaveSddArtifactInput {
@@ -1918,7 +1931,7 @@ export function updateSddChange(changeId: string, input: UpdateSddChangeInput): 
   })
 }
 
-/** FTS across every change in the caller's org — snippets, never whole documents. */
+/** FTS across BOTH openspec trees in the caller's org — snippets, never whole documents. */
 export function searchSddArtifacts(q: string, limit?: number): Promise<SddSearchHit[]> {
   const qs = new URLSearchParams()
   qs.set('q', q)
@@ -1934,4 +1947,164 @@ export function linkSddChangeMemory(changeId: string, input: LinkSddChangeMemory
     method: 'POST',
     body: JSON.stringify(body),
   })
+}
+
+// ── SDD Specs — the living specification ─────────────────────────────────────
+//
+// `openspec/specs/{capability}/spec.md` — the SOURCE OF TRUTH, as opposed to the
+// in-flight drafts under `openspec/changes/{name}/`. `sdd-archive` merges a
+// closing change's delta specs into it, which is when `save_sdd_spec` is called.
+//
+// A spec is NOT an artifact of a change. It belongs to the project and outlives the
+// changes that amend it, so it has its own id, its own revision history and its own
+// routes. `merged_from_change_name` is what ties the two trees together: from a spec
+// you can see which changes shaped each revision.
+//
+// Same two contracts as the artifacts above, because they are the same contracts:
+//   * `PUT /v1/sdd/specs` is idempotent by content hash and answers **200 always**;
+//     "was a revision created?" is `created_revision` in the body, not the status.
+//   * A missing spec is a **404**, never a 200 carrying an empty document — "this
+//     capability has no contract yet" and "its contract is empty" are different facts.
+
+/** One living specification. Never carries content — that lives in revisions. */
+export interface SddSpec {
+  id: string
+  org_id: string
+  project: string
+  capability: string
+  title?: string
+  path?: string
+  latest_revision: number
+  created_by: string
+  created_at: string
+  updated_at: string
+  archived_at?: string | null
+  /** The change whose deltas produced the LATEST revision. Metadata — the list carries it. */
+  last_merged_from_change_id?: string
+  last_merged_from_change_name?: string
+}
+
+/** A spec plus the FULL content of its latest revision (the backend flattens the spec in). */
+export interface SddSpecDetail extends SddSpec {
+  content?: string
+  content_hash?: string
+}
+
+/** A spec a change has merged into, and the revision that merge produced. Flattened. */
+export interface SddSpecMerge extends SddSpec {
+  merged_revision: number
+}
+
+/** A full, immutable spec revision — with content. */
+export interface SddSpecRevision {
+  id: string
+  spec_id: string
+  revision: number
+  content: string
+  content_hash: string
+  byte_size: number
+  merged_from_change_id?: string
+  merged_from_change_name?: string
+  git_commit?: string
+  git_path?: string
+  source: string
+  created_by: string
+  created_at: string
+}
+
+/** Spec revision metadata. Has no `content` field on purpose. */
+export interface SddSpecRevisionMeta {
+  id: string
+  spec_id: string
+  revision: number
+  content_hash: string
+  byte_size: number
+  merged_from_change_id?: string
+  merged_from_change_name?: string
+  git_commit?: string
+  git_path?: string
+  source: string
+  created_by: string
+  created_at: string
+}
+
+export interface SaveSddSpecInput {
+  project: string
+  capability: string
+  content: string
+  title?: string
+  path?: string
+  merged_from_change_name?: string
+  git_commit?: string
+}
+
+/** `PUT /v1/sdd/specs` response. 200 always — `created_revision` carries the news. */
+export interface SaveSddSpecResponse {
+  spec: SddSpec
+  created_revision: boolean
+}
+
+export interface ListSddSpecsInput {
+  project?: string
+  include_archived?: boolean
+}
+
+/**
+ * The write path. Idempotent by content hash: re-saving byte-identical content
+ * creates no revision. 200 always. A `merged_from_change_name` that resolves to no
+ * change is a 404 and writes NOTHING — the provenance is the point of the call.
+ */
+export function saveSddSpec(input: SaveSddSpecInput): Promise<SaveSddSpecResponse> {
+  const body: Record<string, unknown> = {
+    project: input.project,
+    capability: input.capability,
+    content: input.content,
+  }
+  if (input.title                   !== undefined) body.title                   = input.title
+  if (input.path                    !== undefined) body.path                    = input.path
+  if (input.merged_from_change_name !== undefined) body.merged_from_change_name = input.merged_from_change_name
+  if (input.git_commit              !== undefined) body.git_commit              = input.git_commit
+  return request<SaveSddSpecResponse>('/v1/sdd/specs', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+/** By id → the spec plus the FULL content of its latest revision. */
+export function getSddSpec(specId: string): Promise<SddSpecDetail> {
+  return request<SddSpecDetail>(`/v1/sdd/specs/${encodeURIComponent(specId)}`)
+}
+
+/** The natural-key read — a real backend route, not client-side resolution. */
+export function getSddSpecByCapability(project: string, capability: string): Promise<SddSpecDetail> {
+  const qs = new URLSearchParams()
+  qs.set('project', project)
+  qs.set('capability', capability)
+  return request<SddSpecDetail>(`/v1/sdd/specs?${qs.toString()}`)
+}
+
+/** One historical revision, with its full content. */
+export function getSddSpecRevision(specId: string, revision: number): Promise<SddSpecRevision> {
+  return request<SddSpecRevision>(
+    `/v1/sdd/specs/${encodeURIComponent(specId)}/revisions/${encodeURIComponent(String(revision))}`,
+  )
+}
+
+/** Revision metadata only — the response type physically cannot carry content. */
+export function listSddSpecRevisions(specId: string): Promise<SddSpecRevisionMeta[]> {
+  return request<SddSpecRevisionMeta[]>(`/v1/sdd/specs/${encodeURIComponent(specId)}/revisions`)
+}
+
+/** Metadata only, never content. */
+export function listSddSpecs(input: ListSddSpecsInput = {}): Promise<SddSpec[]> {
+  const qs = new URLSearchParams()
+  if (input.project)          qs.set('project',          input.project)
+  if (input.include_archived) qs.set('include_archived', 'true')
+  const query = qs.toString()
+  return request<SddSpec[]>(query ? `/v1/sdd/specs?${query}` : '/v1/sdd/specs')
+}
+
+/** Which living specifications a change has merged its deltas into. */
+export function listSddSpecsForChange(changeId: string): Promise<SddSpecMerge[]> {
+  return request<SddSpecMerge[]>(`/v1/sdd/changes/${encodeURIComponent(changeId)}/specs`)
 }

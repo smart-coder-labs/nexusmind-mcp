@@ -28,8 +28,8 @@ if (process.argv[2] === 'smoke') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective, saveSddArtifact, getSddArtifact, getSddArtifactByKey, getSddArtifactRevision, listSddChanges, getSddChange, updateSddChange, searchSddArtifacts, linkSddChangeMemory } from './client.js'
-import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget, Task, TaskComment, TaskAssignee, Sprint, SprintRetrospective, TaskStatus, TaskPriority, SprintStatus, SddChange, SddArtifact, SddArtifactDetail, SddSearchHit } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective, saveSddArtifact, getSddArtifact, getSddArtifactByKey, getSddArtifactRevision, listSddChanges, getSddChange, updateSddChange, searchSddArtifacts, linkSddChangeMemory, saveSddSpec, getSddSpec, getSddSpecByCapability, getSddSpecRevision, listSddSpecs } from './client.js'
+import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget, Task, TaskComment, TaskAssignee, Sprint, SprintRetrospective, TaskStatus, TaskPriority, SprintStatus, SddChange, SddArtifact, SddArtifactDetail, SddSearchHit, SddSpec, SddSpecDetail } from './client.js'
 import { planInstall } from './harness/plan.js'
 import { applyPlan } from './harness/materialize.js'
 import { resolveDestinationRoot } from './harness/resolver.js'
@@ -3390,13 +3390,61 @@ function formatSddChange(c: SddChange): string {
   return lines.join('\n')
 }
 
+/**
+ * The search spans BOTH openspec trees, and every line SAYS which one it came from.
+ *
+ * That distinction is the whole value of the answer. "Which spec covers rate
+ * limiting?" is a question about the CONTRACT — a hit in the living specification is
+ * what a capability HAS agreed; a hit in a change's draft is what someone is
+ * PROPOSING. Rendering them as one undifferentiated list would let an agent quote a
+ * rejected proposal as though it were the spec.
+ */
 function formatSddSearchHits(hits: SddSearchHit[], query: string): string {
-  if (hits.length === 0) return `No SDD artifacts matched "${query}".`
-  const lines = [`${hits.length} SDD artifact(s) matched "${query}" — pass the change name + kind (+ capability) to get_sdd_artifact for the full document:`]
+  if (hits.length === 0) return `Nothing in the SDD store matched "${query}".`
+  const lines = [`${hits.length} SDD hit(s) for "${query}". A [spec] hit is the LIVING SPECIFICATION (the contract); an [artifact] hit is a draft inside a change (a proposal). Fetch the full document with get_sdd_spec or get_sdd_artifact respectively:`]
   for (const h of hits) {
-    lines.push(`• ${sddKindLabel(h.kind, h.capability)} in change "${h.change_name}" (${h.project}) [artifact ${h.artifact_id}]`)
+    if (h.hit_type === 'spec') {
+      const title = h.title ? ` — ${h.title}` : ''
+      lines.push(`• [spec] ${h.capability}${title} (${h.project}) — the living specification [spec ${h.spec_id}]`)
+    } else {
+      lines.push(`• [artifact] ${sddKindLabel(h.kind ?? 'artifact', h.capability)} in change "${h.change_name}" (${h.project}) [artifact ${h.artifact_id}]`)
+    }
     lines.push(`    ${h.snippet.replace(/\n/g, ' ')}`)
   }
+  return lines.join('\n')
+}
+
+/** Metadata only — this helper must never be given a place to put content. */
+function formatSddSpecLine(s: SddSpec): string {
+  const title = s.title ? ` — ${s.title}` : ''
+  const merged = s.last_merged_from_change_name
+    ? ` — last merged from change "${s.last_merged_from_change_name}"`
+    : ''
+  return `• [${s.id}] ${s.capability}${title} — revision ${s.latest_revision} (${s.project})${merged}`
+}
+
+function formatSddSpecList(specs: SddSpec[]): string {
+  if (specs.length === 0) return 'No living specifications found.'
+  return [
+    `${specs.length} living specification(s) — metadata only; call get_sdd_spec for the full contract:`,
+    ...specs.map(formatSddSpecLine),
+  ].join('\n')
+}
+
+/** Branches on `created_revision` and always names the revision the spec is now at. */
+function formatSavedSddSpec(
+  spec: SddSpec,
+  createdRevision: boolean,
+  mergedFromChange?: string,
+): string {
+  const head = createdRevision
+    ? `Saved the living specification for "${spec.capability}" (${spec.project}) — revision ${spec.latest_revision} created.`
+    : `Content unchanged — no new revision created. The specification for "${spec.capability}" (${spec.project}) is still at revision ${spec.latest_revision}.`
+  const lines = [head, `Spec id: ${spec.id}`]
+  if (mergedFromChange && createdRevision) {
+    lines.push(`Merged from change: ${mergedFromChange} — this revision is traceable back to it.`)
+  }
+  if (spec.path) lines.push(`Path: ${spec.path}`)
   return lines.join('\n')
 }
 
@@ -3598,6 +3646,133 @@ server.tool(
     try {
       const hits = await searchSddArtifacts(query, limit)
       return { content: [{ type: 'text', text: formatSddSearchHits(hits, query) }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// ── SDD Specs — the living specification ─────────────────────────────────────
+//
+// THREE tools over `openspec/specs/{capability}/spec.md` — the source of truth, as
+// opposed to the in-flight drafts the seven tools above cover.
+//
+// The distinction they exist to make: a change's delta spec says what someone is
+// PROPOSING to change; the living specification says what the capability HAS agreed.
+// Before this, an agent asking "what does the spec say about X?" could only find
+// drafts, and would quote a proposal as though it were the contract.
+//
+// A spec is NOT an artifact of a change — it belongs to the project and outlives the
+// changes that amend it. `merged_from_change_name` is what joins the two trees, and
+// `save_sdd_spec` is what `sdd-archive` calls when it merges a closing change's
+// deltas into the contract.
+//
+// As with `get_sdd_artifact`, `get_sdd_spec` returns the FULL document. Nothing here
+// truncates, elides or summarizes — a partially-quoted contract is worse than none.
+
+// save_sdd_spec
+server.tool(
+  'save_sdd_spec',
+  'Persist a LIVING SPECIFICATION (openspec/specs/{capability}/spec.md) to NexusMind — the source of truth for a capability, as opposed to the delta specs inside a change. Call it from `sdd-archive`, when a change closes and its delta specs are merged into the main spec, passing merged_from_change_name so the revision is traceable back to the change that shaped it. Requires sdd:write. Idempotent by content hash: re-saving byte-identical content creates NO new revision. A merged_from_change_name that names no existing change is rejected and nothing is written — the provenance is the point of the call, not a decoration on it.',
+  {
+    project:    z.string().describe('Project the specification belongs to (e.g. "nexus-mind")'),
+    capability: z.string().describe('Capability name — the openspec/specs/{capability}/ directory (e.g. "harness-library")'),
+    content:    z.string().describe('The FULL specification text, post-merge. Max 1 MB; oversized content is rejected and nothing is written.'),
+    title:      z.string().optional().describe('Human-readable title for the capability'),
+    path:       z.string().optional().describe('Repo-relative path (e.g. "openspec/specs/harness-library/spec.md")'),
+    merged_from_change_name: z.string().optional().describe('The change whose delta specs this revision merges. Must name an existing change in this project; omit only when the revision did not come from a change (an import, an admin edit).'),
+    git_commit: z.string().optional().describe('Git commit SHA this revision came from'),
+  },
+  async (input) => {
+    try {
+      const { spec, created_revision } = await saveSddSpec(input)
+      return {
+        content: [{ type: 'text', text: formatSavedSddSpec(spec, created_revision, input.merged_from_change_name) }],
+      }
+    } catch (err) {
+      if (isNotFound(err) && input.merged_from_change_name) {
+        return {
+          content: [{ type: 'text', text: `Not found: no change named "${input.merged_from_change_name}" in project "${input.project}". The specification was NOT saved — a revision that cannot name the change it came from would leave the spec's history lying by omission. Create the change first, or omit merged_from_change_name.` }],
+          isError: true,
+        }
+      }
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// get_sdd_spec
+server.tool(
+  'get_sdd_spec',
+  'Fetch a LIVING SPECIFICATION and return the FULL text — this is what a capability has actually agreed, as opposed to what some in-flight change is proposing. Call it before writing a proposal or a delta spec, so you amend the real contract rather than guessing at it, and whenever you need to know the current requirements for a capability. Address it by spec_id, or by natural key (project + capability); defaults to the latest revision and accepts an explicit revision number. It never truncates, previews or summarizes. Requires sdd:read. A capability with no specification reports not-found and returns no content — that is NOT the same as an empty specification.',
+  {
+    spec_id:    z.string().optional().describe('Spec id. Alternative to the natural key below.'),
+    project:    z.string().optional().describe('Project name (natural key; required with capability)'),
+    capability: z.string().optional().describe('Capability name (natural key; required with project)'),
+    revision:   z.number().int().min(1).optional().describe('Explicit revision number. Omit for the latest revision.'),
+  },
+  async ({ spec_id, project, capability, revision }) => {
+    try {
+      let detail: SddSpecDetail
+      if (spec_id) {
+        detail = await getSddSpec(spec_id)
+      } else if (project && capability) {
+        detail = await getSddSpecByCapability(project, capability)
+      } else {
+        return {
+          content: [{ type: 'text', text: 'Error: provide either spec_id, or both project and capability.' }],
+          isError: true,
+        }
+      }
+
+      let content = detail.content
+      let revisionNumber = detail.latest_revision
+      let mergedFrom = detail.last_merged_from_change_name
+      if (revision !== undefined && revision !== detail.latest_revision) {
+        const rev = await getSddSpecRevision(detail.id, revision)
+        content = rev.content
+        revisionNumber = rev.revision
+        mergedFrom = rev.merged_from_change_name
+      }
+
+      // Never hand back an empty string a caller could mistake for an empty contract.
+      if (content == null) {
+        return {
+          content: [{ type: 'text', text: `Not found: specification ${detail.id} has no content at revision ${revisionNumber}. This is a missing document, NOT an empty one.` }],
+          isError: true,
+        }
+      }
+
+      const provenance = mergedFrom ? `, merged from change "${mergedFrom}"` : ''
+      const header = `Living specification ${detail.id} — capability "${detail.capability}" (${detail.project}), revision ${revisionNumber} of ${detail.latest_revision}${provenance}. This is the CONTRACT, not a draft. Full content follows (untruncated):`
+      return { content: [{ type: 'text', text: `${header}\n\n${content}` }] }
+    } catch (err) {
+      if (isNotFound(err)) {
+        const what = spec_id
+          ? `specification ${spec_id}`
+          : `a specification for capability "${capability}" in project "${project}"`
+        return {
+          content: [{ type: 'text', text: `Not found: no ${what}${revision !== undefined ? ` at revision ${revision}` : ''}. The capability has no living specification (or it is not visible to this API key) — this is NOT an empty specification. Its requirements may still be in flight inside a change: try search_sdd_artifacts.` }],
+          isError: true,
+        }
+      }
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// list_sdd_specs
+server.tool(
+  'list_sdd_specs',
+  'List the LIVING SPECIFICATIONS in a project — one per capability, each with its latest revision and the change that last merged into it. Call it to see which capabilities have an agreed contract at all, and how current each one is, before proposing work against them. Requires sdd:read. Returns metadata only and never specification content: use get_sdd_spec for the full text of one.',
+  {
+    project:          z.string().optional().describe('Filter to a project'),
+    include_archived: z.boolean().optional().describe('Include archived specifications (default false)'),
+  },
+  async (input) => {
+    try {
+      const specs = await listSddSpecs(input)
+      return { content: [{ type: 'text', text: formatSddSpecList(specs) }] }
     } catch (err) {
       return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
     }
