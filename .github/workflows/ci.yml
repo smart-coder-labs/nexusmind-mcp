@@ -12,7 +12,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # TEMPORARILY reduced to Linux only (2026-07-13).
+        #
+        # GitHub bills included Actions minutes with a multiplier: Linux x1,
+        # Windows x2, macOS x10. In July this repo burned 81 Windows + 42 macOS
+        # minutes, which consumed 162 + 420 = 582 of the org's 2,000-minute
+        # monthly allowance — ~30% of the whole budget from under 8% of the
+        # actual machine time. That tipped the org over the limit (2,013/2,000),
+        # Actions stopped running, and CI failing meant Deploy never fired.
+        #
+        # RESTORE THIS. Windows coverage is not decorative: the MCP installs on
+        # user machines and this repo ships Windows troubleshooting docs. When
+        # you restore it, drop macOS first (x10 for the least signal) and
+        # consider running the full matrix only on release tags rather than on
+        # every push:
+        #   os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
         node-version: [20.x, 22.x]
     steps:
       - uses: actions/checkout@v4
