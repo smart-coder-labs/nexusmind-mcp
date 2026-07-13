@@ -1116,6 +1116,16 @@ export interface HarnessWarningMetadata {
   [key: string]: unknown
 }
 
+export interface HarnessVersionSummary {
+  id: string
+  version: string
+  manifest_hash: string
+  targets?: string[]
+  format?: string
+  status?: string
+  published_at?: string
+}
+
 export interface Harness {
   id: string
   slug: string
@@ -1124,7 +1134,9 @@ export interface Harness {
   owner_user_id?: string
   project_id?: string | null
   visibility?: string
-  latest_version?: string
+  // The wire shape is an OBJECT, not a string. Typing it as `string` made
+  // `\`v${h.latest_version}\`` render "v[object Object]" in every harness listing.
+  latest_version?: HarnessVersionSummary
   targets?: HarnessTarget[]
   format?: HarnessFormat
   created_at?: string
@@ -1160,7 +1172,12 @@ export interface HarnessVersion {
   format: HarnessFormat
   targets: HarnessTarget[]
   manifest_hash: string
-  components?: HarnessManifestComponentSummary[]
+  // Components live INSIDE the manifest on the wire. There is no top-level
+  // `components` field; declaring one made every version report "Components: 0".
+  manifest?: {
+    components?: HarnessManifestComponentSummary[]
+    [key: string]: unknown
+  }
   security?: { requires_approval?: boolean; executable?: boolean; secret_scan_status?: string; [key: string]: unknown }
   provenance?: { source?: string; [key: string]: unknown }
   created_at?: string

@@ -4322,14 +4322,10 @@ server.tool(
 // no client-side authority and never fetch manifest content/downloads — only
 // metadata and (for get_harness_version) a preview summary.
 
+import { formatHarness, formatHarnessVersion } from './format-harness.js'
+
 const harnessTargetEnum = z.enum(['claude', 'codex', 'cursor'])
 
-function formatHarness(h: Harness): string {
-  const targets = h.targets && h.targets.length > 0 ? ` [${h.targets.join(', ')}]` : ''
-  const owner = h.owner_user_id ? ` (owner: ${h.owner_user_id})` : ''
-  const version = h.latest_version ? ` v${h.latest_version}` : ''
-  return `• ${h.slug}${version} — ${h.name}${targets}${owner} (id: ${h.id})`
-}
 
 function formatHarnessRecommendation(r: HarnessRecommendation): string {
   const approval = r.approval_required ? ' [requires approval]' : ''
@@ -4337,19 +4333,6 @@ function formatHarnessRecommendation(r: HarnessRecommendation): string {
   return `• ${r.harness_id} v${r.version} — ${r.name} [${r.format}] targets: ${r.targets.join(', ')}${approval}${warning}`
 }
 
-function formatHarnessVersion(v: HarnessVersion): string {
-  const componentCount = v.components?.length ?? 0
-  const lines = [
-    `Harness ${v.harness_id} version ${v.version}`,
-    `Format: ${v.format}`,
-    `Targets: ${v.targets.join(', ')}`,
-    `Manifest hash: ${v.manifest_hash}`,
-    `Components: ${componentCount}`,
-  ]
-  if (v.security?.executable) lines.push('Warning: contains an executable component')
-  if (v.security?.requires_approval) lines.push('Requires approval before install')
-  return lines.join('\n')
-}
 
 function formatHarnessConfigReview(r: HarnessConfigReview): string {
   return `• ${r.id} — source: ${r.source_tool}, status: ${r.status}${r.created_at ? ` (${new Date(r.created_at).toLocaleDateString()})` : ''}`
