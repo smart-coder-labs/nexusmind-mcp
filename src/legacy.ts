@@ -28,8 +28,8 @@ if (process.argv[2] === 'smoke') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective, saveSddArtifact, getSddArtifact, getSddArtifactByKey, getSddArtifactRevision, listSddChanges, getSddChange, updateSddChange, searchSddArtifacts, linkSddChangeMemory, saveSddSpec, getSddSpec, getSddSpecByCapability, getSddSpecRevision, listSddSpecs } from './client.js'
-import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget, Task, TaskComment, TaskAssignee, Sprint, SprintRetrospective, TaskStatus, TaskPriority, SprintStatus, SddChange, SddArtifact, SddArtifactDetail, SddSearchHit, SddSpec, SddSpecDetail } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective, saveSddArtifact, getSddArtifact, getSddArtifactByKey, getSddArtifactRevision, listSddChanges, getSddChange, updateSddChange, searchSddArtifacts, linkSddChangeMemory, saveSddSpec, getSddSpec, getSddSpecByCapability, getSddSpecRevision, listSddSpecs, listClients, createClient, updateClient, archiveClient, listClientMembers, addClientMember, removeClientMember, reportUsage, getUsageSummary, runUsageBackfill, locateCode, promoteMemory } from './client.js'
+import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget, Task, TaskComment, TaskAssignee, Sprint, SprintRetrospective, TaskStatus, TaskPriority, SprintStatus, SddChange, SddArtifact, SddArtifactDetail, SddSearchHit, SddSpec, SddSpecDetail, Client, ClientMember, LocateCodeHit, UsageSummaryRow } from './client.js'
 import { planInstall } from './harness/plan.js'
 import { applyPlan } from './harness/materialize.js'
 import { resolveDestinationRoot } from './harness/resolver.js'
@@ -4868,6 +4868,282 @@ server.tool(
         content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
         isError: true,
       }
+    }
+  }
+)
+
+// ── Code Locate ──────────────────────────────────────────────────────────────
+//
+// locate_code is the highest-value token saver: instead of reading files to find
+// where something lives, get a ranked list of file paths first, then read only
+// the winner. Agents should reach for this BEFORE opening files.
+
+function formatLocateHit(h: LocateCodeHit, index: number): string {
+  const symbol = h.top_symbol ? ` — ${h.top_symbol}` : ''
+  return `[${index + 1}] ${h.file_path}${symbol} · score: ${h.score.toFixed(3)}`
+}
+
+server.tool(
+  'locate_code',
+  'Token-cheap "jump to the file": returns a RANKED LIST OF DISTINCT FILE PATHS (no code bodies) for a semantic query. Call this BEFORE reading files — it points you at the right file(s) so you open only those instead of scanning the tree, saving large amounts of context. Same embedding + ranking as search_code but the response is just paths + best symbol per file. Requires index_project first. Use search_code when you actually need the code chunks; use locate_code to decide what to read.',
+  {
+    project: z.string().describe('Project key — must match the key used in index_project'),
+    query:   z.string().describe('Natural language or code description of what to find'),
+    limit:   z.number().int().min(1).max(50).optional().describe('Max distinct files to return (default: 5)'),
+  },
+  async ({ project, query, limit }) => {
+    try {
+      const { results } = await locateCode({ project, query, limit })
+      if (results.length === 0) {
+        return { content: [{ type: 'text', text: `No files located for query: "${query}" in project "${project}". Has it been indexed (index_project)?` }] }
+      }
+      const text = [
+        `Located ${results.length} file(s) for "${query}" in project "${project}" (read these before scanning):`,
+        '',
+        ...results.map(formatLocateHit),
+      ].join('\n')
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ── Clients (company brain) ──────────────────────────────────────────────────
+
+function formatClient(c: Client, index: number): string {
+  const archived = c.archived_at ? ' [archived]' : ''
+  return `[${index + 1}] ${c.name} (slug: ${c.slug}, status: ${c.status})${archived} (id: ${c.id})`
+}
+
+// list_clients
+server.tool(
+  'list_clients',
+  'List the organization\'s clients (the top level of the company-brain hierarchy: client → project → task). Non-admins see only clients they are a member of; admins/super_users see the org. Use to resolve a client id/slug before creating projects or reading usage.',
+  {
+    include_archived: z.boolean().optional().describe('Include archived (offboarded) clients (default: false)'),
+  },
+  async ({ include_archived }) => {
+    try {
+      const clients = await listClients({ include_archived })
+      if (clients.length === 0) {
+        return { content: [{ type: 'text', text: 'No clients found.' }] }
+      }
+      const lines = clients.map(formatClient)
+      return { content: [{ type: 'text', text: `${clients.length} client(s):\n\n${lines.join('\n')}` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// create_client
+server.tool(
+  'create_client',
+  'Create a client. The slug is the stable, immutable external identifier (lowercase letters, digits and dashes, 1-64 chars) and cannot be changed later — pick carefully. Requires client:write.',
+  {
+    name:   z.string().describe('Human-readable client name (1-128 chars)'),
+    slug:   z.string().describe('Immutable identifier: lowercase alphanumeric with internal dashes, 1-64 chars'),
+    status: z.enum(['active', 'paused', 'offboarded']).optional().describe('Client status (default: active)'),
+  },
+  async ({ name, slug, status }) => {
+    try {
+      const client = await createClient({ name, slug, status })
+      return { content: [{ type: 'text', text: `Client created: "${client.name}" (slug: ${client.slug}, id: ${client.id})` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// update_client
+server.tool(
+  'update_client',
+  'Update a client\'s name or status. The slug is immutable and cannot be changed here (the backend rejects it). Requires client:write.',
+  {
+    id:     z.string().describe('Client id to update (returned by list_clients)'),
+    name:   z.string().optional().describe('New client name'),
+    status: z.enum(['active', 'paused', 'offboarded']).optional().describe('New status. "offboarded" retires the client for new work but keeps history.'),
+  },
+  async ({ id, name, status }) => {
+    try {
+      const client = await updateClient(id, { name, status })
+      return { content: [{ type: 'text', text: `Client ${client.id} updated (name: ${client.name}, status: ${client.status}).` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// archive_client
+server.tool(
+  'archive_client',
+  'Archive (soft-hide) a client without deleting it. History is preserved; the client is excluded from list_clients unless include_archived is set. Requires client:write.',
+  {
+    id: z.string().describe('Client id to archive'),
+  },
+  async ({ id }) => {
+    try {
+      await archiveClient(id)
+      return { content: [{ type: 'text', text: `Client archived (id: ${id}).` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// list_client_members
+server.tool(
+  'list_client_members',
+  'List the members of a client. Membership controls who can see a client and its projects for non-admin users.',
+  {
+    id: z.string().describe('Client id to list members for'),
+  },
+  async ({ id }) => {
+    try {
+      const members = await listClientMembers(id)
+      if (members.length === 0) {
+        return { content: [{ type: 'text', text: `No members found for client ${id}.` }] }
+      }
+      const lines = members.map((m: ClientMember, i: number) => {
+        const name  = m.name  ? ` — ${m.name}`  : ''
+        const email = m.email ? ` <${m.email}>` : ''
+        return `[${i + 1}] ${m.user_id}${name}${email} (role: ${m.role})`
+      })
+      return { content: [{ type: 'text', text: `${members.length} member(s) in client ${id}:\n\n${lines.join('\n')}` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// add_client_member
+server.tool(
+  'add_client_member',
+  'Add a user to a client, granting them visibility of the client and its projects. Requires client:write.',
+  {
+    id:      z.string().describe('Client id to add the user to'),
+    user_id: z.string().describe('User id to add (from list_users)'),
+    role:    z.string().optional().describe('Member role (default: "member")'),
+  },
+  async ({ id, user_id, role }) => {
+    try {
+      await addClientMember(id, { user_id, role })
+      return { content: [{ type: 'text', text: `User ${user_id} added to client ${id}.` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// remove_client_member
+server.tool(
+  'remove_client_member',
+  'Remove a user from a client, revoking their client-scoped visibility. Requires client:write.',
+  {
+    id:      z.string().describe('Client id to remove the user from'),
+    user_id: z.string().describe('User id to remove'),
+  },
+  async ({ id, user_id }) => {
+    try {
+      await removeClientMember(id, user_id)
+      return { content: [{ type: 'text', text: `User ${user_id} removed from client ${id}.` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// ── Usage metrics ─────────────────────────────────────────────────────────────
+
+// report_usage
+server.tool(
+  'report_usage',
+  'Record one unit of agent work (token counts + wall-clock time) into the usage ledger. The backend resolves it into the task → project → client → org hierarchy; unresolvable references are stored as NULL, never rejected. Requires memory:write on the target project. Report after completing a meaningful chunk of work so usage rolls up per client/project.',
+  {
+    project:     z.string().optional().describe('Project name (resolved server-side, never auto-created). If omitted but task_id is set, the project is derived from the task.'),
+    task_id:     z.string().optional().describe('Task id this work belongs to'),
+    session_id:  z.string().optional().describe('Session id this work belongs to'),
+    model:       z.string().optional().describe('Model identifier (e.g. "claude-opus-4")'),
+    tokens_in:   z.number().int().min(0).optional().describe('Input/prompt tokens'),
+    tokens_out:  z.number().int().min(0).optional().describe('Output/completion tokens'),
+    duration_ms: z.number().int().min(0).optional().describe('Wall-clock duration in milliseconds'),
+    event_ts:    z.string().optional().describe('Event timestamp (ISO 8601); defaults to now server-side'),
+  },
+  async ({ project, task_id, session_id, model, tokens_in, tokens_out, duration_ms, event_ts }) => {
+    try {
+      const { id } = await reportUsage({ project, task_id, session_id, model, tokens_in, tokens_out, duration_ms, event_ts })
+      return { content: [{ type: 'text', text: `Usage recorded (id: ${id}).` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// get_usage_summary
+server.tool(
+  'get_usage_summary',
+  'Aggregated usage rollup (tokens + duration + event counts) at a chosen level: task, project, client, org, model, or user. Admin/super_user only; admins are scoped to their visible projects. Use to answer "how many tokens did client X burn this month" or "which model cost the most".',
+  {
+    level:      z.enum(['task', 'project', 'client', 'org', 'model', 'user']).optional().describe('Rollup dimension (default: "project")'),
+    from:       z.string().optional().describe('Start of range (ISO 8601 / YYYY-MM-DD), inclusive'),
+    to:         z.string().optional().describe('End of range (ISO 8601 / YYYY-MM-DD), inclusive'),
+    client_id:  z.string().optional().describe('Filter to a single client'),
+    project_id: z.string().optional().describe('Filter to a single project'),
+  },
+  async ({ level, from, to, client_id, project_id }) => {
+    try {
+      const summary = await getUsageSummary({ level, from, to, client_id, project_id })
+      const rows = summary.rows.map((r: UsageSummaryRow, i: number) =>
+        `[${i + 1}] ${r.key_name} — ${r.tokens_total} tokens (in ${r.tokens_in} / out ${r.tokens_out}), ${r.duration_ms} ms, ${r.event_count} event(s)`)
+      const t = summary.totals
+      const text = [
+        `Usage summary by ${level ?? 'project'}${summary.rows.length === 0 ? ' (no data)' : ''}:`,
+        '',
+        ...rows,
+        '',
+        `TOTAL — ${t.tokens_total} tokens (in ${t.tokens_in} / out ${t.tokens_out}), ${t.duration_ms} ms, ${t.event_count} event(s)`,
+      ].join('\n')
+      return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// run_usage_backfill
+server.tool(
+  'run_usage_backfill',
+  'Derive one usage row per session that lacks one, from existing session data. Idempotent-ish backfill for historical usage. super_user only.',
+  {},
+  async () => {
+    try {
+      const { inserted } = await runUsageBackfill()
+      return { content: [{ type: 'text', text: `Usage backfill complete: ${inserted} row(s) inserted.` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
+    }
+  }
+)
+
+// ── Promote memory ────────────────────────────────────────────────────────────
+
+// promote_memory
+server.tool(
+  'promote_memory',
+  'Promote a client- or project-scoped memory into an organization-wide asset (e.g. a client-specific learning that becomes a shared playbook entry). Always explicit — nothing promotes automatically, because promoting client material into a shared asset is a deliberate decision. Lineage is preserved in promoted_from. Requires memory:write on the source memory\'s project.',
+  {
+    id: z.string().describe('The memory id to promote (must be client- or project-scoped)'),
+  },
+  async ({ id }) => {
+    try {
+      const m = await promoteMemory(id)
+      return { content: [{ type: 'text', text: `Memory promoted to org scope (new id: ${m.id}, scope: ${m.scope}, promoted_from: ${id}).` }] }
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true }
     }
   }
 )

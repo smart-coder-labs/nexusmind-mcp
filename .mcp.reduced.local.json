@@ -1,0 +1,14 @@
+{
+  "//": "LOCAL-ONLY reduced-profile config. Does NOT touch the prod .mcp.json (which points agents at prod via npx). Runs the LOCAL build (dist/index.js) with the reduced 4-tool profile against a local backend. Build first: npm run build. Point Claude Code at this file (e.g. `claude --mcp-config .mcp.reduced.local.json`) or copy the server entry into your project's .mcp.json.",
+  "mcpServers": {
+    "nexusmind-reduced": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": {
+        "NEXUSMIND_MCP_TOOL_PROFILE": "reduced_readonly",
+        "NEXUSMIND_BASE_URL": "http://localhost:8080",
+        "NEXUSMIND_API_KEY": "${NEXUSMIND_API_KEY}"
+      }
+    }
+  }
+}

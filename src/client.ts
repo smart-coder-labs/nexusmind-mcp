@@ -2108,3 +2108,287 @@ export function listSddSpecs(input: ListSddSpecsInput = {}): Promise<SddSpec[]> 
 export function listSddSpecsForChange(changeId: string): Promise<SddSpecMerge[]> {
   return request<SddSpecMerge[]>(`/v1/sdd/changes/${encodeURIComponent(changeId)}/specs`)
 }
+
+// ── Clients (company brain) ──────────────────────────────────────────────────
+//
+// Thin permissioned wrappers over the backend client API. Every route is gated
+// server-side (`client:read` / `client:write`) on the caller's Bearer key, and
+// a hidden client is reported as 404 (never 403) by the backend — this file adds
+// no client-side authority. `slug` is immutable after create: `updateClient`
+// deliberately omits it, matching the backend which rejects a slug in a PATCH.
+
+export type ClientStatus = 'active' | 'paused' | 'offboarded'
+
+export interface Client {
+  id: string
+  org_id: string
+  name: string
+  slug: string
+  status: string
+  archived_at?: string | null
+  created_at: string
+  [key: string]: unknown
+}
+
+export interface ClientMember {
+  id: string
+  client_id: string
+  user_id: string
+  email: string
+  name: string
+  role: string
+  created_at: string
+  [key: string]: unknown
+}
+
+export interface ListClientsInput {
+  include_archived?: boolean
+}
+
+export function listClients(input: ListClientsInput = {}): Promise<Client[]> {
+  const qs = input.include_archived ? '?include_archived=true' : ''
+  return request<Client[]>(`/v1/clients${qs}`)
+}
+
+export interface CreateClientInput {
+  name: string
+  slug: string
+  status?: ClientStatus
+}
+
+export function createClient(input: CreateClientInput): Promise<Client> {
+  const body: Record<string, unknown> = { name: input.name, slug: input.slug }
+  if (input.status !== undefined) body.status = input.status
+  return request<Client>('/v1/clients', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export interface UpdateClientInput {
+  name?: string
+  status?: ClientStatus
+}
+
+export function updateClient(id: string, input: UpdateClientInput): Promise<Client> {
+  const body: Record<string, unknown> = {}
+  if (input.name   !== undefined) body.name   = input.name
+  if (input.status !== undefined) body.status = input.status
+  return request<Client>(`/v1/clients/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+export function archiveClient(id: string): Promise<void> {
+  return request<void>(`/v1/clients/${encodeURIComponent(id)}/archive`, { method: 'POST' })
+}
+
+/** Refused with 422 by the backend if the client still owns projects. */
+export function deleteClient(id: string): Promise<void> {
+  return request<void>(`/v1/clients/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function listClientMembers(id: string): Promise<ClientMember[]> {
+  return request<ClientMember[]>(`/v1/clients/${encodeURIComponent(id)}/members`)
+}
+
+export interface AddClientMemberInput {
+  user_id: string
+  role?: string
+}
+
+export function addClientMember(id: string, input: AddClientMemberInput): Promise<void> {
+  const body: Record<string, unknown> = { user_id: input.user_id }
+  if (input.role !== undefined) body.role = input.role
+  return request<void>(`/v1/clients/${encodeURIComponent(id)}/members`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function removeClientMember(id: string, userId: string): Promise<void> {
+  return request<void>(
+    `/v1/clients/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+// ── Usage metrics (tokens + execution time) ──────────────────────────────────
+//
+// `reportUsage` ingests one work event (gated `memory:write` on the target
+// project). `getUsageSummary` and `runUsageBackfill` are privileged: the backend
+// restricts summary to admin/super_user (admins scoped to visible projects) and
+// backfill to super_user only. This client adds no scoping of its own.
+
+export interface ReportUsageInput {
+  project?: string
+  task_id?: string
+  session_id?: string
+  model?: string
+  tokens_in?: number
+  tokens_out?: number
+  duration_ms?: number
+  event_ts?: string
+}
+
+export function reportUsage(input: ReportUsageInput): Promise<{ id: string }> {
+  const body: Record<string, unknown> = {}
+  if (input.project     !== undefined) body.project     = input.project
+  if (input.task_id     !== undefined) body.task_id     = input.task_id
+  if (input.session_id  !== undefined) body.session_id  = input.session_id
+  if (input.model       !== undefined) body.model       = input.model
+  if (input.tokens_in   !== undefined) body.tokens_in   = input.tokens_in
+  if (input.tokens_out  !== undefined) body.tokens_out  = input.tokens_out
+  if (input.duration_ms !== undefined) body.duration_ms = input.duration_ms
+  if (input.event_ts    !== undefined) body.event_ts    = input.event_ts
+  return request<{ id: string }>('/v1/usage', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export type UsageSummaryLevel = 'task' | 'project' | 'client' | 'org' | 'model' | 'user'
+
+export interface UsageSummaryRow {
+  key_id: string | null
+  key_name: string
+  tokens_in: number
+  tokens_out: number
+  tokens_total: number
+  duration_ms: number
+  event_count: number
+}
+
+export interface UsageSummaryResponse {
+  rows: UsageSummaryRow[]
+  totals: UsageSummaryRow
+}
+
+export interface GetUsageSummaryInput {
+  level?: UsageSummaryLevel
+  from?: string
+  to?: string
+  client_id?: string
+  project_id?: string
+}
+
+export function getUsageSummary(input: GetUsageSummaryInput = {}): Promise<UsageSummaryResponse> {
+  const qs = new URLSearchParams()
+  if (input.level)      qs.set('level',      input.level)
+  if (input.from)       qs.set('from',       input.from)
+  if (input.to)         qs.set('to',         input.to)
+  if (input.client_id)  qs.set('client_id',  input.client_id)
+  if (input.project_id) qs.set('project_id', input.project_id)
+  const query = qs.toString()
+  return request<UsageSummaryResponse>(query ? `/v1/usage/summary?${query}` : '/v1/usage/summary')
+}
+
+export function runUsageBackfill(): Promise<{ inserted: number }> {
+  return request<{ inserted: number }>('/v1/usage/backfill', { method: 'POST' })
+}
+
+// ── Code locate (token-cheap "jump to the file") ─────────────────────────────
+//
+// Same query embedding + cosine ranking as `searchCode`, but the response is a
+// lean, deduped-by-file list of ranked file paths — no chunk bodies. Returns 404
+// if the project has not been indexed. Default limit 5 (backend-applied).
+
+export interface LocateCodeHit {
+  file_path: string
+  top_symbol?: string | null
+  score: number
+}
+
+export interface LocateCodeResponse {
+  results: LocateCodeHit[]
+}
+
+export interface LocateCodeInput {
+  project: string
+  query: string
+  limit?: number
+}
+
+export function locateCode(input: LocateCodeInput): Promise<LocateCodeResponse> {
+  const body: Record<string, unknown> = { project: input.project, query: input.query }
+  if (input.limit !== undefined) body.limit = input.limit
+  return request<LocateCodeResponse>('/v1/code/locate', { method: 'POST', body: JSON.stringify(body) })
+}
+
+// ── Promote memory (client/project scope → org asset) ────────────────────────
+//
+// Always an explicit call. The backend promotes a client- or project-scoped
+// memory into an organization asset, keeping lineage in `promoted_from`. Returns
+// the newly promoted memory (HTTP 201).
+
+export function promoteMemory(id: string): Promise<Memory> {
+  return request<Memory>(`/v1/memory/${encodeURIComponent(id)}/promote`, { method: 'POST' })
+}
+
+// ── Record decision (ADR) ────────────────────────────────────────────────────
+//
+// Composes a structured ADR document and stores it as a `decision` memory. Same
+// composition the legacy `record_decision` tool performs — kept here as a single
+// wrapper so the reduced profile can wire it to one `run` closure. Adds no
+// authority: it delegates to `storeMemory` (gated `memory:write` server-side).
+
+export interface RecordDecisionInput {
+  title: string
+  context: string
+  options_considered: string[]
+  decision: string
+  rationale: string
+  consequences?: string
+  project?: string
+  tags?: string[]
+}
+
+export function recordDecision(input: RecordDecisionInput): Promise<StoreMemoryResponse> {
+  const content = [
+    `# Decision: ${input.title}`,
+    '',
+    '## Context',
+    input.context,
+    '',
+    '## Options Considered',
+    ...input.options_considered.map(o => `- ${o}`),
+    '',
+    '## Decision',
+    input.decision,
+    '',
+    '## Rationale',
+    input.rationale,
+    ...(input.consequences ? ['', '## Consequences', input.consequences] : []),
+  ].join('\n')
+  return storeMemory({
+    content,
+    title: input.title,
+    type: 'decision',
+    tags: ['adr', 'decision', ...(input.tags ?? [])],
+    project: input.project,
+  })
+}
+
+// ── Get context (team conventions + memories) ────────────────────────────────
+//
+// The session-bootstrap read: team conventions (highest authority) plus recent
+// memories for a project. Returns structured data (the reduced fabric paginates
+// it); the legacy `get_context` tool renders the same two lists as prose. Reuses
+// the existing `listConventions` / `listMemories` reads — no new endpoint.
+
+export interface GetContextInput {
+  project?: string
+  limit?: number
+  include_conventions?: boolean
+  include_memories?: boolean
+}
+
+export interface ContextResponse {
+  project?: string
+  conventions: Convention[]
+  memories: Memory[]
+}
+
+export function getContext(input: GetContextInput = {}): Promise<ContextResponse> {
+  const wantConventions = input.include_conventions !== false
+  const wantMemories    = input.include_memories    !== false
+  return Promise.all([
+    wantMemories    ? listMemories({ project: input.project, limit: input.limit ?? 40 }) : Promise.resolve([] as Memory[]),
+    wantConventions ? listConventions(undefined, undefined, input.project)               : Promise.resolve([] as Convention[]),
+  ]).then(([memories, conventions]) => ({ project: input.project, conventions, memories }))
+}

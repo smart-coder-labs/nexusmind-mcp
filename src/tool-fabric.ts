@@ -45,16 +45,35 @@ export class ToolFabric {
   ) { this.owner = owner }
 
   findTools(query = '', effectClass?: EffectClass, permissions: string[] = []): ToolDescriptor[] {
-    const needle = query.trim().toLowerCase()
-    const matches = this.definitions.filter(tool => {
-      const text = [tool.name, tool.namespace, tool.summary, ...tool.capabilities].join(' ').toLowerCase()
-      const queryMatch = !needle || text.includes(needle)
-      const effectMatch = !effectClass || tool.effects.includes(effectClass)
-      const permissionMatch = tool.permissions.every(permission => permissions.includes(permission))
-      return queryMatch && effectMatch && permissionMatch
-    })
-    metric('find', matches.length)
-    return matches.map(({ schema, examples, input, run, ...descriptor }) => descriptor)
+    // Tokenized keyword ranking instead of whole-query substring: a natural
+    // multi-word query ("locate code file", "store memory decision") rarely
+    // appears verbatim in a summary, so substring matching returned [] and the
+    // agent could never obtain a handle. We score by how many distinct query
+    // tokens hit the tool (name matches weighted higher) and rank by score.
+    const tokens = this.tokenizeQuery(query)
+    const scored = this.definitions
+      .filter(tool => {
+        const effectMatch = !effectClass || tool.effects.includes(effectClass)
+        const permissionMatch = tool.permissions.every(permission => permissions.includes(permission))
+        return effectMatch && permissionMatch
+      })
+      .map(tool => {
+        const name = tool.name.toLowerCase()
+        const text = [tool.name, tool.namespace, tool.summary, ...tool.capabilities].join(' ').toLowerCase()
+        const score = tokens.length === 0
+          ? 1
+          : tokens.reduce((sum, t) => sum + (name.includes(t) ? 2 : text.includes(t) ? 1 : 0), 0)
+        return { tool, score }
+      })
+      .filter(entry => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+    metric('find', scored.length)
+    return scored.map(({ tool: { schema, examples, input, run, ...descriptor } }) => descriptor)
+  }
+
+  private tokenizeQuery(query: string): string[] {
+    const STOP = new Set(['where', 'is', 'the', 'a', 'an', 'of', 'to', 'in', 'for', 'and', 'on', 'at', 'by', 'with', 'how', 'do', 'does', 'me', 'my', 'it', 'that', 'this'])
+    return [...new Set(query.toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length >= 2 && !STOP.has(t)))]
   }
 
   loadTool(handle: string, permissions: string[] = []): ToolDefinition {
@@ -110,7 +129,7 @@ export class ToolFabric {
   private authorize(handle: string, permissions: string[]): ToolDefinition {
     const tool = this.definitions.find(candidate => candidate.schema_handle === handle)
     if (!tool) { metric('invalid_handle', 1); throw new Error('FABRIC_INVALID_HANDLE') }
-    if (tool.effects.some(effect => effect !== 'read')) { metric('denied_effect', 1); throw new Error('FABRIC_READONLY_EFFECT_DENIED') }
+    if (tool.effects.includes('delete')) { metric('denied_effect', 1); throw new Error('FABRIC_DESTRUCTIVE_EFFECT_DENIED') }
     if (!tool.permissions.every(permission => permissions.includes(permission))) { metric('denied_effect', 1); throw new Error('FABRIC_PERMISSION_DENIED') }
     return tool
   }

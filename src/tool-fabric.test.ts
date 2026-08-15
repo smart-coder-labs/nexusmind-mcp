@@ -21,9 +21,10 @@ test('findTools returns compact descriptors and filters permissions/effects', ()
   assert.equal('examples' in results[0], false)
 })
 
-test('read-only fabric denies writes and deletes before execution', () => {
+test('fabric allows writes but denies destructive deletes before execution', () => {
   const fabric = new ToolFabric([fixture('write'), fixture('delete')], 1000, 'owner')
-  for (const effect of ['write', 'delete']) assert.throws(() => fabric.loadTool(`tool://test/${effect}_tool@${FABRIC_VERSION}`, ['fixture:read']), /FABRIC_READONLY_EFFECT_DENIED/)
+  assert.ok(fabric.loadTool(`tool://test/write_tool@${FABRIC_VERSION}`, ['fixture:read']))
+  assert.throws(() => fabric.loadTool(`tool://test/delete_tool@${FABRIC_VERSION}`, ['fixture:read']), /FABRIC_DESTRUCTIVE_EFFECT_DENIED/)
 })
 
 test('load and result handles expire, versions are checked, and pages are bounded', async () => {
