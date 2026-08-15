@@ -58,6 +58,40 @@ Done. Restart Claude Code or Cursor and the tools are available immediately.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full tool list and the 0.5.0 migration table.
 
+## Tool Search / progressive disclosure (opt-in)
+
+The default entrypoint is deliberately unchanged: it registers the legacy catalog of 136
+tools and remains compatible with current Claude Code, Cursor, and Codex hosts. Hosts that
+support discovery can opt into the reduced read-only profile:
+
+```bash
+NEXUSMIND_MCP_TOOL_PROFILE=reduced_readonly \
+  npx @smart-coder-labs/nexusmind-mcp@latest
+
+# Equivalent CLI activation
+npx @smart-coder-labs/nexusmind-mcp@latest --tool-profile reduced_readonly
+```
+
+The reduced profile registers only `find_tools`, `load_tool`, `execute_tool`, and `fetch`.
+Its flow is discovery -> load -> execute -> fetch:
+
+- `find_tools(query, effect_class, permissions)` returns compact, versioned descriptors only.
+- `load_tool(handle)` returns the schema and examples for one authorized handle, with a TTL and registry version.
+- `execute_tool(handle, version, args, permissions)` resolves an allow-listed server-side handler, validates the schema and permissions, and returns an expiring result handle.
+- `fetch(handle, range/cursor)` returns a bounded page only; it never dumps the result.
+
+Descriptors include namespace, summary, capabilities, IO, effects, permissions, cost, latency,
+known failures, schema handle, and version. The reduced profile physically omits tools that
+cannot be mapped safely and rejects write/delete effects with stable errors. Its in-memory
+handles are process-local and expire on restart or TTL; a persistent handle store is not yet
+implemented. Results and arguments are not logged. Metrics contain operation names and counts
+only, and can be disabled with `NEXUSMIND_MCP_METRICS=off`.
+
+Hosts without discovery support must explicitly use the default/legacy profile (unset
+`NEXUSMIND_MCP_TOOL_PROFILE` or set it to `legacy`); dynamic selection is not required for
+existing hosts. This client-side profile is aligned with the Context Fabric backend work in
+PR #248, but NX-Gold Tool Search remains pending until it is exercised against real hosts.
+
 ---
 
 ## Harness tools
