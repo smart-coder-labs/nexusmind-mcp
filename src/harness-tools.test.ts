@@ -181,7 +181,13 @@ test('get_harness_version returns a manifest preview without writing any local f
     format: 'agent',
     targets: ['claude'],
     manifest_hash: 'sha256:deadbeef',
-    components: [{ path: 'agent.md', sha256: 'sha256:abc', size_bytes: 100 }],
+    // Components live INSIDE the manifest — verified against a real GET response.
+    // This fixture used to put them at the top level, which is where the formatter
+    // also (wrongly) looked. The fake and the code agreed with each other, so the
+    // test passed while every real version reported "Components: 0".
+    manifest: {
+      components: [{ path: 'agent.md', sha256: 'sha256:abc', size_bytes: 100 }],
+    },
   })
   try {
     await withClient(backend, async client => {
