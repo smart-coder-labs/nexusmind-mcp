@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.0
+
+### Added
+
+- **`essential` profile is now daily-complete (37 direct tools).** Added the SDD and task
+  tools the `sdd-*` and tasks skills invoke every phase — `save_sdd_artifact`, `get_sdd_artifact`,
+  `get_sdd_artifact_by_key`, `get_sdd_change`, `update_sdd_change`, `link_sdd_change_memory`,
+  `save_sdd_spec`, `get_sdd_spec`, `get_sdd_spec_by_capability`, plus `get_task`, `assign_task`,
+  `add_task_comment`, `add_task_label`, `link_task_spec`, `resolve_tasks_for_spec` — to the curated
+  registry (so both `essential` and `reduced_readonly` gain them). 0.12.0's `essential` was
+  memory-centric and would have failed SDD/task skills with "tool not found". Still lean (37 vs the
+  legacy 149) and direct (no fabric handshake), so the token profile is unchanged.
+
 ## 0.12.0
 
 ### Added
