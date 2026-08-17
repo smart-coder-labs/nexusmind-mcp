@@ -54,8 +54,7 @@ export class ToolFabric {
     const scored = this.definitions
       .filter(tool => {
         const effectMatch = !effectClass || tool.effects.includes(effectClass)
-        const permissionMatch = tool.permissions.every(permission => permissions.includes(permission))
-        return effectMatch && permissionMatch
+        return effectMatch && this.permits(tool.permissions, permissions)
       })
       .map(tool => {
         const name = tool.name.toLowerCase()
@@ -113,7 +112,7 @@ export class ToolFabric {
       throw new Error('FABRIC_INVALID_HANDLE')
     }
     const lease = this.results.get(handle)
-    if (!lease || lease.owner !== this.owner || lease.expiresAt <= Date.now() || !lease.permissions.every(permission => permissions.includes(permission))) {
+    if (!lease || lease.owner !== this.owner || lease.expiresAt <= Date.now() || !this.permits(lease.permissions, permissions)) {
       this.results.delete(handle)
       metric('invalid_handle', 1)
       throw new Error('FABRIC_HANDLE_EXPIRED')
@@ -130,8 +129,23 @@ export class ToolFabric {
     const tool = this.definitions.find(candidate => candidate.schema_handle === handle)
     if (!tool) { metric('invalid_handle', 1); throw new Error('FABRIC_INVALID_HANDLE') }
     if (tool.effects.includes('delete')) { metric('denied_effect', 1); throw new Error('FABRIC_DESTRUCTIVE_EFFECT_DENIED') }
-    if (!tool.permissions.every(permission => permissions.includes(permission))) { metric('denied_effect', 1); throw new Error('FABRIC_PERMISSION_DENIED') }
+    if (!this.permits(tool.permissions, permissions)) { metric('denied_effect', 1); throw new Error('FABRIC_PERMISSION_DENIED') }
     return tool
+  }
+
+  // The caller's `held` permissions PRE-FILTER the fabric so an agent is not
+  // offered tools its key cannot use. This is a UX filter, not a security
+  // boundary: every tool call is independently gated server-side on the Bearer
+  // key, and an unauthorized call returns permission_denied from the backend.
+  //
+  // An empty `held` means "unspecified" — the common case, because an agent has
+  // no way to enumerate its own key's grants and nothing supplies them. Treating
+  // empty as "matches only zero-permission tools" hid EVERY tool and made the
+  // whole reduced profile look empty (find_tools returned [] for every query).
+  // Empty therefore means "do not pre-filter, defer to the backend"; a non-empty
+  // list still pre-filters exactly as before for a permission-aware host.
+  private permits(required: string[], held: string[]): boolean {
+    return held.length === 0 || required.every(permission => held.includes(permission))
   }
 
   private isResultHandle(handle: string): boolean { return handle.startsWith('result://') }

@@ -21,6 +21,21 @@ test('findTools returns compact descriptors and filters permissions/effects', ()
   assert.equal('examples' in results[0], false)
 })
 
+test('empty caller permissions do not pre-filter — the reduced profile is usable without a permission-aware host', () => {
+  // The reported failure: an agent calls find_tools without a `permissions`
+  // arg (it cannot enumerate its key's grants), the arg defaults to [], and the
+  // old `.every()` check matched only zero-permission tools — so EVERY query
+  // returned [] and the whole reduced profile looked empty. Empty must mean
+  // "do not pre-filter"; the backend still gates each call.
+  const fabric = new ToolFabric([fixture(), fixture('write')], 1000, 'owner')
+  assert.equal(fabric.findTools('fixture', undefined, []).length, 2, 'empty permissions must surface all tools, not none')
+  assert.equal(fabric.findTools('fixture').length, 2, 'omitted permissions default to unfiltered too')
+  // load/execute must likewise defer to the backend when unspecified.
+  assert.ok(fabric.loadTool(`tool://test/read_tool@${FABRIC_VERSION}`, []), 'a tool loads without the caller declaring permissions')
+  // A permission-aware host that DOES pass a set still gets pre-filtering.
+  assert.equal(fabric.findTools('fixture', undefined, ['other:read']).length, 0, 'a non-empty, non-matching set still filters everything out')
+})
+
 test('fabric allows writes but denies destructive deletes before execution', () => {
   const fabric = new ToolFabric([fixture('write'), fixture('delete')], 1000, 'owner')
   assert.ok(fabric.loadTool(`tool://test/write_tool@${FABRIC_VERSION}`, ['fixture:read']))

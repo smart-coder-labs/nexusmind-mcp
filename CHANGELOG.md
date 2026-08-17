@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.12.0
+
+### Added
+
+- **`essential` tool profile** (`NEXUSMIND_MCP_TOOL_PROFILE=essential` or `--tool-profile essential`).
+  Exposes the ~22 curated tools (memory, conventions, tasks, SDD, projects/clients, usage, code)
+  **directly** as MCP tools — one call per action. Unlike `reduced_readonly`, there is no
+  `find_tools -> load_tool -> execute_tool` handshake, which measured as the dominant source of
+  extra turns (and therefore tokens). In an A/B over three complex tasks, `essential` + a minimal
+  usage protocol brought per-task consumption from +170% to **parity with tool-less Claude**
+  (-63% vs `reduced_readonly`), with no quality loss. `reduced_readonly` and `legacy` are unchanged.
+
+### Fixed
+
+- **`reduced_readonly` returned zero tools to unassisted agents.** `find_tools`/`load_tool`/
+  `execute_tool` filtered by a caller-supplied `permissions` list that defaults to `[]`, so every
+  tool (all require >= `memory:read`) was filtered out and the whole profile looked empty. Empty
+  now means "unspecified -> do not pre-filter, defer to the backend" (the real permission boundary);
+  a non-empty list still pre-filters for a permission-aware host.
+
 ## 0.9.0
 
 ### Added

@@ -4,7 +4,11 @@
 // that only implement tools/list/tools/call keep the existing 136-tool catalog.
 const profileArg = process.argv.indexOf('--tool-profile')
 const cliProfile = profileArg >= 0 ? process.argv[profileArg + 1] : undefined
-if (process.env.NEXUSMIND_MCP_TOOL_PROFILE === 'reduced_readonly' || cliProfile === 'reduced_readonly') {
+const profile = process.env.NEXUSMIND_MCP_TOOL_PROFILE ?? cliProfile
+if (profile === 'essential') {
+  const { startEssential } = await import('./essential.js')
+  await startEssential()
+} else if (profile === 'reduced_readonly') {
   const { startReducedReadonly } = await import('./reduced.js')
   await startReducedReadonly()
 } else {
