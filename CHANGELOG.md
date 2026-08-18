@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0
+
+### Added
+
+- **Repository-aware project and capability configuration.** The `essential` and
+  `reduced_readonly` profiles can load `.nexusmind.yaml`, resolve the active NexusMind project from
+  the working path, inherit agent profiles, and remove capabilities with `disable_capabilities`.
+  Config parsing rejects unknown fields, invalid references, unsupported routing patterns, profile
+  cycles, and secret-shaped keys. The legacy profile remains unchanged for compatibility.
+
 ## 0.13.0
 
 ### Added
