@@ -84,9 +84,9 @@ function zodJsonSchema(value: unknown): Record<string, unknown> {
   return { type: 'object' }
 }
 
-export async function startReducedReadonly(): Promise<void> {
+export async function startReducedReadonly(activeDefinitions: readonly ToolDefinition[] = definitions): Promise<void> {
   const server = new McpServer({ name: 'nexusmind-reduced-readonly', version: REGISTRY_VERSION })
-  const fabric = new ToolFabric(definitions)
+  const fabric = new ToolFabric(activeDefinitions)
 
   server.tool('find_tools', 'Discover compact authorized tool descriptors. Schemas are not included.', { query: z.string().optional(), effect_class: z.enum(['read', 'write', 'delete']).optional(), permissions: z.array(z.string()).default([]) }, async ({ query, effect_class, permissions }) => ({ content: [{ type: 'text', text: JSON.stringify({ profile: 'reduced_readonly', registry_version: REGISTRY_VERSION, tools: fabric.findTools(query, effect_class, permissions) }) }] }))
   server.tool('load_tool', 'Load the schema for one authorized tool handle.', { handle: z.string(), permissions: z.array(z.string()).default([]) }, async ({ handle, permissions }) => { const loaded = fabric.loadTool(handle, permissions); return { content: [{ type: 'text', text: JSON.stringify({ schema: descriptorSchema(loaded), examples: loaded.examples, version: loaded.version, registry_version: REGISTRY_VERSION, expires_in_ms: 300000 }) }] } })
@@ -97,3 +97,4 @@ export async function startReducedReadonly(): Promise<void> {
 }
 
 export { definitions }
+export type { ToolDefinition }

@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { ZodRawShape } from 'zod'
-import { definitions } from './reduced.js'
+import { definitions, type ToolDefinition } from './reduced.js'
 import { REGISTRY_VERSION } from './tool-fabric.js'
 
 // The essential profile: the curated set of tools an agent actually reaches for,
@@ -22,10 +22,10 @@ import { REGISTRY_VERSION } from './tool-fabric.js'
 // injected-context size and turn count, not the number of tool schemas, so the
 // direct catalog (~22 tools vs the legacy 149) is effectively free. The backend
 // still enforces permissions on every call.
-export async function startEssential(): Promise<void> {
+export async function startEssential(activeDefinitions: readonly ToolDefinition[] = definitions): Promise<void> {
   const server = new McpServer({ name: 'nexusmind-essential', version: REGISTRY_VERSION })
 
-  for (const def of definitions) {
+  for (const def of activeDefinitions) {
     // `input` is always a z.object(...) for these definitions, so its `.shape`
     // is the raw shape McpServer.tool expects.
     const shape = (def.input as unknown as { shape: ZodRawShape }).shape
