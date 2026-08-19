@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.0
+
+### Added
+
+- **Code-search tools in the curated registry** — `search_code` (semantic code chunks) and
+  `get_symbol_context` (a symbol's chunk without opening the file), joining the existing
+  `locate_code`. Exposed directly by `essential` (39 tools) and via `reduced_readonly`. Lets an
+  agent read indexed code from NexusMind instead of grepping/opening files; measured a repeatable
+  small win (-7% cost, fewer exploration turns) over tool-less Claude on a mature service. Requires
+  the backend to have embeddings enabled (`NEXUSMIND_EMBED_ENABLED=true`) and the project indexed.
+
 ## 0.14.0
 
 ### Added
