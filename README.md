@@ -375,3 +375,14 @@ NEXUSMIND_API_KEY=nm_your_key NEXUSMIND_BASE_URL=http://localhost:8080 npx @smar
 | Codex: `connection closed: initialize response` | Corrupted npx cache. `doctor` (or re-running `setup`) clears it automatically; otherwise `npm cache clean --force`. Then restart Codex |
 | Codex hooks show "Failed" / no approve option (Windows) | Upgrade to ≥0.8.2 and re-run `setup`, then run `/hooks` in Codex and approve the NexusMind hooks (the fix changes their hash, so re-approval is required once) |
 | `Invalid API key` right after changing the key (Windows) | `setx` doesn't update already-running programs. Fully quit and reopen the client from the Start menu — not from an existing terminal |
+
+---
+
+## Related repositories
+
+- **[nexus-mind](https://github.com/smart-coder-labs/nexus-mind)** — the NexusMind backend + admin panel this server talks to.
+- **[nexusmind-claude-plugin](https://github.com/smart-coder-labs/nexusmind-claude-plugin)** — the Claude Code plugin that bundles this server.
+
+## License
+
+[MIT](LICENSE) © Smart Coder Labs

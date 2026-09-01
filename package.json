@@ -2,6 +2,7 @@
   "name": "@smart-coder-labs/nexusmind-mcp",
   "version": "0.15.0",
   "description": "NexusMind MCP server for Claude Code and Cursor \u2014 team memory that persists across sessions",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "nexusmind-mcp": "dist/index.js",
