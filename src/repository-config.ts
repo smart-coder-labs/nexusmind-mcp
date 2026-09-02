@@ -11,7 +11,20 @@ type Profile = { extends?: string; capabilities?: string[]; disable_capabilities
 export type RepositoryConfig = { version: number; repository: { id: string }; defaults?: { project?: string; agent_profile?: string }; projects: Record<string, Project>; agents?: { profiles: Record<string, Profile> } }
 
 export function loadRepositoryConfig(explicit?: string, cwd = process.cwd()): { config: RepositoryConfig; path: string; root: string } | undefined {
-  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim()
+  // Outside a Git repository there is no repository config to find, and that is
+  // not an error: the MCP must still start (this runs at startup). Swallowing
+  // git's own stderr keeps the "fatal: not a git repository" line off the
+  // stdio the MCP client is trying to parse as JSON-RPC.
+  let root: string
+  try {
+    root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return undefined
+  }
   let path = explicit ? resolve(cwd, explicit) : undefined
   if (!path) {
     let cursor = resolve(cwd)
