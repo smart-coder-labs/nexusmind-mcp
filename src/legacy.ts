@@ -142,14 +142,19 @@ server.tool(
 // filtered browse/list when it is absent. Absorbs search_memory, search_memories_advanced,
 // list_memories, get_memory_timeline, get_session_memories.
 //
-// POST /v1/memory/search only accepts {query, limit, mode} server-side — every other
+// POST /v1/memory/search accepts {query, limit, mode, project} server-side; every OTHER
 // filter must be applied client-side when `query` is present. GET /v1/memory (list mode)
 // does support project/tool/type/scope/session_id/collection_id/include_archived as
 // query params, so those are forwarded server-side there; only `tags` and `pinned` stay
 // client-side in list mode since the backend does not filter on them.
+//
+// `project` moved server-side deliberately. A client-side filter runs over the top 100
+// ranked matches, so scoping to a project could return nothing while plenty of matching
+// memories existed — they simply never entered the ranked window, because cosine ranking
+// does not know about scope. Narrowing before the ranking is the only version that works.
 server.tool(
   'search_memories',
-  'Search or browse team memories. Pass query for semantic search (filtered client-side over the top 100 ranked matches — narrow filters may under-return beyond that window); omit it to list/browse with filters (project, type, tags, date range, session).',
+  'Search or browse team memories. Pass `project` to scope the search — strongly recommended: ranking has no notion of scope, so in an org with several clients an unscoped query returns other clients\' memories. Pass query for semantic search (every filter EXCEPT project is applied client-side over the top 100 ranked matches, so narrow ones may under-return); omit query to list/browse with filters.',
   {
     query:            z.string().optional().describe('Semantic search text — omit to list/browse instead'),
     project:          z.string().optional().describe('Filter by project name'),
@@ -194,9 +199,18 @@ server.tool(
 
       let results: Memory[]
       if (isQueryMode) {
-        // Backend ignores anything beyond {query, limit, mode} here — filter everything
-        // else client-side rather than relying on the endpoint to honor it.
-        results = await searchMemories({ query: input.query!, limit: fetchLimit })
+        // The backend honors {query, limit, mode, project}; everything below it does
+        // not, so those stay client-side rather than being silently ignored.
+        results = await searchMemories({
+          query: input.query!,
+          limit: fetchLimit,
+          ...(input.project ? { project: input.project } : {}),
+        })
+        // Kept as a net, not as the mechanism. The backend narrows before ranking,
+        // which is the part that matters; but an older backend ignores the field
+        // silently (serde defaults it, no deny_unknown_fields), and a client
+        // published ahead of its server would start leaking other clients' memories
+        // with nothing failing. It costs one pass over at most 100 rows.
         if (input.project)       results = results.filter(m => m.project === input.project)
         if (input.type)          results = results.filter(m => m.type === input.type)
         if (input.scope)         results = results.filter(m => m.scope === input.scope)

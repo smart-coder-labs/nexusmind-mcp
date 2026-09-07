@@ -42,8 +42,14 @@ test('fabric allows writes but denies destructive deletes before execution', () 
   assert.throws(() => fabric.loadTool(`tool://test/delete_tool@${FABRIC_VERSION}`, ['fixture:read']), /FABRIC_DESTRUCTIVE_EFFECT_DENIED/)
 })
 
+// The TTL is 200ms, not 20ms, and the sleep below matches it. What this test
+// asserts is the ORDERING — a handle is usable before its TTL and refused after —
+// not the exact number. With a 20ms budget the assertions before the sleep raced
+// the clock: node's test runner runs files in parallel, so a loaded machine could
+// spend 20ms of wall time between creating the handle and the second fetch, and
+// the test failed on a system that was behaving correctly.
 test('load and result handles expire, versions are checked, and pages are bounded', async () => {
-  const fabric = new ToolFabric([fixture()], 20, 'owner')
+  const fabric = new ToolFabric([fixture()], 200, 'owner')
   const handle = `tool://test/read_tool@${FABRIC_VERSION}`
   fabric.loadTool(handle, ['fixture:read'])
   await assert.rejects(() => fabric.executeTool(handle, { value: 'x' }, '0.0.0', ['fixture:read']), /FABRIC_VERSION_MISMATCH/)
@@ -53,7 +59,7 @@ test('load and result handles expire, versions are checked, and pages are bounde
   assert.ok(first.next_cursor)
   const second = fabric.fetchResult(result, undefined, first.next_cursor, ['fixture:read'])
   assert.equal(second.items[0], 'x-50')
-  await new Promise(resolve => setTimeout(resolve, 25))
+  await new Promise(resolve => setTimeout(resolve, 250))
   assert.throws(() => fabric.fetchResult(result, undefined, undefined, ['fixture:read']), /FABRIC_HANDLE_EXPIRED/)
 })
 

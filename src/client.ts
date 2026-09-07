@@ -120,6 +120,14 @@ export function storeMemory(input: StoreMemoryInput): Promise<StoreMemoryRespons
 export interface SearchMemoriesInput {
   query: string
   limit?: number
+  /// Narrow the search to one project, server-side.
+  ///
+  /// Cosine ranking has no notion of scope, so in an org holding several clients
+  /// every client's memories compete for the same top-K. Filtering after the fact
+  /// cannot fix that — the right rows may never enter the ranked window. Measured
+  /// on a 2,907-entry corpus: an unscoped question about one client's deploy setup
+  /// returned three of five results from another client's storefront.
+  project?: string
   collection_id?: string
   pinned?: boolean
   archived?: boolean
@@ -132,6 +140,7 @@ export function searchMemories(queryOrInput: string | SearchMemoriesInput, limit
       : {
           query: queryOrInput.query,
           limit: queryOrInput.limit ?? limit,
+          ...(queryOrInput.project       !== undefined && { project:       queryOrInput.project }),
           ...(queryOrInput.collection_id !== undefined && { collection_id: queryOrInput.collection_id }),
           ...(queryOrInput.pinned        !== undefined && { pinned:        queryOrInput.pinned }),
           ...(queryOrInput.archived      !== undefined && { archived:      queryOrInput.archived }),
