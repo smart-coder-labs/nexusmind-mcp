@@ -11,11 +11,17 @@ type Profile = { extends?: string; capabilities?: string[]; disable_capabilities
 export type RepositoryConfig = { version: number; repository: { id: string }; defaults?: { project?: string; agent_profile?: string }; projects: Record<string, Project>; agents?: { profiles: Record<string, Profile> } }
 
 export function loadRepositoryConfig(explicit?: string, cwd = process.cwd()): { config: RepositoryConfig; path: string; root: string } | undefined {
-  // Outside a Git repository there is no repository config to find, and that is
-  // not an error: the MCP must still start (this runs at startup). Swallowing
-  // git's own stderr keeps the "fatal: not a git repository" line off the
-  // stdio the MCP client is trying to parse as JSON-RPC.
-  let root: string
+  // A Git repository is the usual root, but it is not the only shape that needs
+  // routing. A workspace directory holding several independent clones is not a
+  // repository at all, so requiring `git rev-parse` here meant a session opened
+  // at that directory resolved to the folder name, matched no indexed project,
+  // and NexusMind stood itself down — the exact case this config exists to
+  // describe. When git has no answer, the directory holding `.nexusmind.yaml`
+  // is the root.
+  //
+  // Swallowing git's own stderr keeps the "fatal: not a git repository" line off
+  // the stdio the MCP client is trying to parse as JSON-RPC.
+  let root: string | undefined
   try {
     root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd,
@@ -23,19 +29,25 @@ export function loadRepositoryConfig(explicit?: string, cwd = process.cwd()): { 
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim()
   } catch {
-    return undefined
+    root = undefined
   }
   let path = explicit ? resolve(cwd, explicit) : undefined
   if (!path) {
+    // Walk up to the git root when there is one, otherwise to the filesystem
+    // root: outside a repository there is no boundary to stop at, and the first
+    // config found is the one that claims this directory.
     let cursor = resolve(cwd)
-    while (cursor.startsWith(root)) {
+    for (;;) {
       const candidate = join(cursor, '.nexusmind.yaml')
       try { readFileSync(candidate); path = candidate; break } catch { /* continue */ }
-      if (cursor === root) break
-      cursor = dirname(cursor)
+      if (root !== undefined && cursor === root) break
+      const parent = dirname(cursor)
+      if (parent === cursor) break
+      cursor = parent
     }
   }
   if (!path) return undefined
+  if (root === undefined) root = dirname(path)
   const configRelative = relative(root, path)
   if (configRelative === '' || (!configRelative.startsWith('..') && !isAbsolute(configRelative))) {
     const doc = parseDocument(readFileSync(path, 'utf8'), { uniqueKeys: true, merge: false })
