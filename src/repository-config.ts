@@ -128,7 +128,13 @@ export function resolveProject(config: RepositoryConfig, repoPath: string): { al
   const best = matches.at(-1)
   if (best && matches.length > 1 && compareScore(best.score, matches.at(-2)!.score) === 0 && best.alias !== matches.at(-2)!.alias) throw new Error('ROUTING_AMBIGUOUS')
   if (best) return { alias: best.alias, project: best.project }
-  const alias = config.defaults?.project
+  // The default answers for the config's own directory, not for everything below
+  // it. Applying it to any unmatched path lets the file claim trees that are not
+  // its own — a clone of another repository sitting inside a workspace would
+  // resolve to the workspace default instead of to itself, and every tool call
+  // would be scoped to the wrong project. Unmatched and not at the root means no
+  // answer, which the caller is free to resolve some other way.
+  const alias = path === '.' || path === '' ? config.defaults?.project : undefined
   return alias ? { alias, project: config.projects[alias] } : undefined
 }
 

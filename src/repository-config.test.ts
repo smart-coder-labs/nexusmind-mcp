@@ -62,3 +62,18 @@ test('no config anywhere still returns undefined rather than throwing', () => {
   const bare = mkdtempSync(join(tmpdir(), 'nm-bare-'))
   assert.equal(loadRepositoryConfig(undefined, bare), undefined)
 })
+
+// The default must not claim the whole tree. A path the config does not map is
+// somebody else's — typically another clone inside the same workspace — and
+// answering with the workspace default scopes every tool call to the wrong
+// project while looking perfectly successful.
+test('an unmapped path does not inherit the default project', () => {
+  assert.equal(resolveProject(config, '.')?.alias, 'platform', 'the root still uses the default')
+  const scoped: RepositoryConfig = {
+    version: 1, repository: { id: 'ws' }, defaults: { project: 'alpha' },
+    projects: { alpha: { project_id: 'a', paths: ['repoA/**'] } },
+  }
+  assert.equal(resolveProject(scoped, 'repoA/src')?.alias, 'alpha')
+  assert.equal(resolveProject(scoped, 'someone-elses-clone/src'), undefined)
+  assert.equal(resolveProject(scoped, '.')?.alias, 'alpha')
+})
