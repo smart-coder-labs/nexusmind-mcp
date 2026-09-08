@@ -92,6 +92,33 @@ Hosts without discovery support must explicitly use the default/legacy profile (
 existing hosts. This client-side profile is aligned with the Context Fabric backend work in
 PR #248, but NX-Gold Tool Search remains pending until it is exercised against real hosts.
 
+## Context-only profile (`only_context`)
+
+For deployments that use NexusMind as a company brain and nothing else. It registers the
+curated registry cut down to the tools that feed an agent's context — 15 tools, directly,
+one call per action, exactly like `essential`:
+
+| Area | Tools |
+|------|-------|
+| Memories | `search_memories`, `list_memories`, `get_memory`, `get_context`, `store_memory`, `update_memory`, `record_decision`, `promote_memory` |
+| Conventions | `list_conventions`, `store_convention` |
+| Catalog | `list_projects`, `list_clients` |
+| Code | `locate_code`, `search_code`, `get_symbol_context` |
+
+No task, SDD, usage or harness tool is exposed. The set is an explicit allow-list
+(`src/only-context.ts`): a tool added to the curated registry later does not enter this
+profile until someone decides it is context.
+
+```bash
+NEXUSMIND_MCP_TOOL_PROFILE=only_context npx @smart-coder-labs/nexusmind-mcp@latest
+# or
+npx @smart-coder-labs/nexusmind-mcp@latest --tool-profile only_context
+```
+
+`.nexusmind.yaml` agent profiles apply on top of it and can only narrow it further. The
+Claude Code plugin selects it through the same `NEXUSMIND_MCP_TOOL_PROFILE` variable; the
+matching admin build is `VITE_ADMIN_PROFILE=only-context`.
+
 ---
 
 ## Harness tools

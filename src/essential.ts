@@ -22,8 +22,11 @@ import { REGISTRY_VERSION } from './tool-fabric.js'
 // injected-context size and turn count, not the number of tool schemas, so the
 // direct catalog (~22 tools vs the legacy 149) is effectively free. The backend
 // still enforces permissions on every call.
-export async function startEssential(activeDefinitions: readonly ToolDefinition[] = definitions): Promise<void> {
-  const server = new McpServer({ name: 'nexusmind-essential', version: REGISTRY_VERSION })
+//
+// `only_context` reuses this direct registration with a narrower registry (see
+// only-context.ts); `serverName` is what the host shows for the process.
+export async function startEssential(activeDefinitions: readonly ToolDefinition[] = definitions, serverName = 'nexusmind-essential'): Promise<void> {
+  const server = new McpServer({ name: serverName, version: REGISTRY_VERSION })
 
   for (const def of activeDefinitions) {
     // `input` is always a z.object(...) for these definitions, so its `.shape`

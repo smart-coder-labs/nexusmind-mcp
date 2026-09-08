@@ -18,6 +18,17 @@ It exposes only `find_tools`, `load_tool`, `execute_tool`, and `fetch`. The curr
 registry contains only explicitly mapped read operations. Unmapped tools are omitted rather
 than executed through a generic dispatcher; use the legacy profile for them.
 
+`essential` registers the same curated registry directly (one MCP tool per action).
+`only_context` is `essential` cut down to context tools only — memories, conventions,
+projects/clients and code search; no tasks, SDD, usage or harness:
+
+```bash
+NEXUSMIND_MCP_TOOL_PROFILE=only_context npx @smart-coder-labs/nexusmind-mcp@latest
+```
+
+Both are plain `tools/list` + `tools/call` profiles and work on every host the legacy
+profile works on.
+
 ## Host Matrix
 
 | Host | Default profile | Reduced profile | Verification status |

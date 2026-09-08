@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.18.0
+
+### Added
+
+- **`only_context` tool profile** — the curated registry cut down to the 15 tools that feed an
+  agent's context: memories (`search_memories`, `list_memories`, `get_memory`, `get_context`,
+  `store_memory`, `update_memory`, `record_decision`, `promote_memory`), conventions
+  (`list_conventions`, `store_convention`), the catalog (`list_projects`, `list_clients`) and
+  code search (`locate_code`, `search_code`, `get_symbol_context`). Registered directly like
+  `essential`; no task, SDD, usage or harness tool is exposed. Built for deployments that use
+  NexusMind as a company brain only (the Claude Code plugin with
+  `NEXUSMIND_MCP_TOOL_PROFILE=only_context`, and the admin's `only-context` build). Select with `NEXUSMIND_MCP_TOOL_PROFILE=only_context` or
+  `--tool-profile only_context`. The allow-list lives in `src/only-context.ts` and startup
+  fails loudly if a listed tool disappears from the registry.
+- `startEssential` accepts a server name so the host can tell the two direct profiles apart.
+
+### Changed
+
+- **An unknown `NEXUSMIND_MCP_TOOL_PROFILE` now fails at startup** instead of silently falling
+  through to the legacy catalog. Legacy is the widest surface, so a typo on a deployment that
+  chose a narrow profile used to expose everything that profile exists to hide. Unset still
+  means legacy; `legacy` is accepted explicitly.
+
 ## 0.15.0
 
 ### Added
