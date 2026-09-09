@@ -121,6 +121,51 @@ matching admin build is `VITE_ADMIN_PROFILE=only-context`.
 
 ---
 
+## Repository config (`.nexusmind.yaml`)
+
+Optional, committed next to the code at the git root. It maps paths of a repository to
+NexusMind projects and can narrow the tool catalog an agent sees there. The full reference —
+fields, glob rules, resolution order, identifiers, examples, error codes — lives in the
+backend repository:
+[docs/REPOSITORY_CONFIG.md](https://github.com/smart-coder-labs/nexus-mind/blob/main/docs/REPOSITORY_CONFIG.md).
+
+What this server does with it (`essential`, `reduced_readonly` and `only_context` profiles;
+`legacy` ignores the file):
+
+1. Discovers it from the working directory upward, stopping at the git root (`--config <path>`
+   overrides discovery; `--working-path <dir>` overrides the directory being resolved).
+2. Resolves the project alias that claims that directory (`--project <alias>` overrides routing).
+3. Picks `agent_profile` from that project, else `defaults.agent_profile`, else
+   `--agent-profile`, and removes from the catalog every tool whose capabilities the profile does
+   not grant. It never adds tools and never changes backend permissions.
+
+The file does **not** set a default `project` on tool calls — the agent still passes the project
+name explicitly. Invalid files fail at startup with a `CONFIG_*` / `ROUTING_*` code so a
+misconfigured repository is never silently served with the wrong surface.
+
+```yaml
+version: 1
+repository:
+  id: commerce-monorepo
+defaults:
+  project: platform
+projects:
+  platform:
+    project_id: <project id>
+    paths: ["**"]
+    exclude: ["services/payments/**"]
+  payments:
+    project_id: <project id>
+    paths: ["services/payments/**"]
+    agent_profile: readonly
+agents:
+  profiles:
+    readonly:
+      capabilities: [context.read, memory.read, convention.read, code.read]
+```
+
+---
+
 ## Harness tools
 
 Harnesses are shareable agent artifacts — agents, skills, commands, hooks, output styles,
