@@ -60,8 +60,11 @@ See [CHANGELOG.md](./CHANGELOG.md) for the full tool list and the 0.5.0 migratio
 
 ## Tool Search / progressive disclosure (opt-in)
 
-The default entrypoint is deliberately unchanged: it registers the legacy catalog of 136
-tools and remains compatible with current Claude Code, Cursor, and Codex hosts. Hosts that
+The default entrypoint registers the `essential` profile: the same curated registry as
+`legacy` (one MCP tool per action), but ~39 tool definitions instead of 148, which is the
+difference between ~4k and ~24k tokens of tool schemas in every client session. It is a
+plain `tools/list` + `tools/call` profile and works on every host `legacy` works on; set
+`NEXUSMIND_MCP_TOOL_PROFILE=legacy` to restore the full 148-tool catalog. Hosts that
 support discovery can opt into the reduced read-only profile:
 
 ```bash
@@ -87,9 +90,8 @@ handles are process-local and expire on restart or TTL; a persistent handle stor
 implemented. Results and arguments are not logged. Metrics contain operation names and counts
 only, and can be disabled with `NEXUSMIND_MCP_METRICS=off`.
 
-Hosts without discovery support must explicitly use the default/legacy profile (unset
-`NEXUSMIND_MCP_TOOL_PROFILE` or set it to `legacy`); dynamic selection is not required for
-existing hosts. This client-side profile is aligned with the Context Fabric backend work in
+Hosts without discovery support use a direct profile (the default `essential`, or `legacy`);
+dynamic selection is not required for existing hosts. This client-side profile is aligned with the Context Fabric backend work in
 PR #248, but NX-Gold Tool Search remains pending until it is exercised against real hosts.
 
 ## Context-only profile (`only_context`)
