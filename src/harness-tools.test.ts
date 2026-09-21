@@ -97,6 +97,7 @@ async function withClient(
     args: [ENTRY],
     cwd: opts.cwd,
     env: {
+      NEXUSMIND_MCP_TOOL_PROFILE: 'legacy',
       NEXUSMIND_API_KEY: 'nm_test_key',
       NEXUSMIND_BASE_URL: `http://127.0.0.1:${backend.port}`,
     },
@@ -558,6 +559,7 @@ test('apply_harness_install: elicitation ACCEPT overwrites a pre-existing file w
         args: [ENTRY],
         cwd,
         env: {
+          NEXUSMIND_MCP_TOOL_PROFILE: 'legacy',
           NEXUSMIND_API_KEY: 'nm_test_key',
           NEXUSMIND_BASE_URL: `http://127.0.0.1:${backend.port}`,
         },

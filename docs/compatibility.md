@@ -2,9 +2,10 @@
 
 ## Profiles
 
-The default `dist/index.js` entrypoint is the legacy MCP profile and registers 136 tools.
-Current Claude Code, Cursor, and Codex integrations continue to use this profile. It is
-selected when `NEXUSMIND_MCP_TOOL_PROFILE` is unset or set to `legacy`.
+The default `dist/index.js` entrypoint is the `essential` MCP profile (~39 tools). The
+legacy profile registers 148 tools and is selected with `NEXUSMIND_MCP_TOOL_PROFILE=legacy`.
+Both are plain `tools/list` + `tools/call` profiles, so Claude Code, Cursor, and Codex work
+on either.
 
 `reduced_readonly` is an opt-in profile for hosts that support progressive disclosure:
 

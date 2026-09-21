@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 
-// Legacy remains the default entrypoint. The reduced profile is opt-in so hosts
-// that only implement tools/list/tools/call keep the existing 136-tool catalog.
+// `essential` is the default entrypoint: the legacy catalog publishes 148 tool
+// definitions (~24k tokens) into every client session, while the essential cut
+// covers the same workflows in ~4k. Legacy stays available as an explicit opt-in.
 const profileArg = process.argv.indexOf('--tool-profile')
 const cliProfile = profileArg >= 0 ? process.argv[profileArg + 1] : undefined
-const profile = process.env.NEXUSMIND_MCP_TOOL_PROFILE ?? cliProfile
+const requestedProfile = process.env.NEXUSMIND_MCP_TOOL_PROFILE ?? cliProfile
 // An unknown profile must not fall through to the legacy catalog. Legacy is the
 // WIDEST surface, so a typo (`only-context` for `only_context`) on a deployment
 // that bought the narrow cut would expose everything the cut exists to hide.
 const KNOWN_PROFILES = ['legacy', 'essential', 'reduced_readonly', 'only_context']
-if (profile !== undefined && !KNOWN_PROFILES.includes(profile)) {
-  throw new Error(`Unknown NEXUSMIND_MCP_TOOL_PROFILE "${profile}". Expected one of: ${KNOWN_PROFILES.join(', ')}`)
+if (requestedProfile !== undefined && !KNOWN_PROFILES.includes(requestedProfile)) {
+  throw new Error(`Unknown NEXUSMIND_MCP_TOOL_PROFILE "${requestedProfile}". Expected one of: ${KNOWN_PROFILES.join(', ')}`)
 }
+const profile = requestedProfile ?? 'essential'
 const valueAfter = (flag: string): string | undefined => { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : undefined }
 let activeDefinitions
 if (profile === 'essential' || profile === 'reduced_readonly' || profile === 'only_context') {

@@ -276,6 +276,7 @@ async function connect(port: number): Promise<Client> {
     args: [ENTRY],
     env: {
       ...process.env,
+      NEXUSMIND_MCP_TOOL_PROFILE: 'legacy',
       NEXUSMIND_API_KEY: 'nm_test_key',
       NEXUSMIND_BASE_URL: `http://127.0.0.1:${port}`,
     },
