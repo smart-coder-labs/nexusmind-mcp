@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.0
+
+### Added
+
+- **`get_context_pack`** — the context for a task in one call (software factory F2): the files
+  that rank highest for the task text (BM25 over split identifiers) with their best code chunks,
+  plus the files they import, each with the reason it was picked and a content hash, pinned to a
+  commit. Calls `POST /v1/code/context-pack` (backend with migration v83 or later). Available in
+  `legacy`, the curated registry and `only_context`, which now has 16 tools.
+
 ## 0.18.0
 
 ### Added

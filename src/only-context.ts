@@ -33,6 +33,7 @@ export const ONLY_CONTEXT_TOOL_NAMES = [
   // code
   'locate_code',
   'search_code',
+  'get_context_pack',
   'get_symbol_context',
 ] as const
 

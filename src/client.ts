@@ -2336,6 +2336,81 @@ export function locateCode(input: LocateCodeInput): Promise<LocateCodeResponse> 
   return request<LocateCodeResponse>('/v1/code/locate', { method: 'POST', body: JSON.stringify(body) })
 }
 
+// ── Context pack (factory F2, "Bibliotecario") ─────────────────────────────────
+//
+// The context a coding agent starts a task from: ranked files with their best
+// chunks plus files one relative import away, each with a reason and a content
+// hash (`pack`), and the code itself (`evidence`) under a byte budget.
+
+export interface ContextArtifact {
+  path: string
+  symbol?: string | null
+  kind: 'code' | 'test' | 'schema' | 'config' | 'documentation' | 'history'
+  reason: string
+  content_hash: string
+  retrieval_score?: number
+}
+
+export interface ContextPack {
+  schema_version: 1
+  task_id: string
+  repository: { commit: string; branch?: string }
+  artifacts: ContextArtifact[]
+  constraints: string[]
+  acceptance_tests: string[]
+}
+
+export interface ContextEvidence {
+  artifact: number
+  path: string
+  start_line: number
+  end_line: number
+  content: string
+  truncated: boolean
+}
+
+export interface ContextPackResponse {
+  pack: ContextPack
+  evidence: ContextEvidence[]
+  index: { commit: string | null; last_indexed: string | null; stale: boolean }
+}
+
+export interface ContextPackInput {
+  project: string
+  query: string
+  task_id?: string
+  commit?: string
+  max_files?: number
+  max_bytes?: number
+}
+
+export function getContextPack(input: ContextPackInput): Promise<ContextPackResponse> {
+  const body: Record<string, unknown> = { project: input.project, query: input.query }
+  for (const key of ['task_id', 'commit', 'max_files', 'max_bytes'] as const) {
+    if (input[key] !== undefined) body[key] = input[key]
+  }
+  return request<ContextPackResponse>('/v1/code/context-pack', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/** The pack as text for an agent: index state, then each artifact with its
+ *  reason and code. */
+export function formatContextPack(response: ContextPackResponse): string {
+  const { pack, evidence, index } = response
+  const lines = [
+    `Context pack for task ${pack.task_id} at ${pack.repository.commit.slice(0, 12)}` +
+      (index.stale ? ` (STALE: index built at ${index.commit?.slice(0, 12) ?? 'unknown'}; code may have moved)` : ''),
+    `${pack.artifacts.length} artifact(s). Read these before opening other files.`,
+  ]
+  pack.artifacts.forEach((artifact, i) => {
+    const symbol = artifact.symbol ? ` — ${artifact.symbol}` : ''
+    lines.push('', `[${i + 1}] ${artifact.path}${symbol} (${artifact.kind}) · ${artifact.reason}`)
+    for (const e of evidence.filter(e => e.artifact === i)) {
+      lines.push(`lines ${e.start_line}-${e.end_line}${e.truncated ? ' (truncated)' : ''}:`, '```', e.content, '```')
+    }
+  })
+  return lines.join('\n')
+}
+
 // ── Promote memory (client/project scope → org asset) ────────────────────────
 //
 // Always an explicit call. The backend promotes a client- or project-scoped

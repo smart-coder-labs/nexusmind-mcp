@@ -28,7 +28,7 @@ if (process.argv[2] === 'smoke') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective, saveSddArtifact, getSddArtifact, getSddArtifactByKey, getSddArtifactRevision, listSddChanges, getSddChange, updateSddChange, searchSddArtifacts, linkSddChangeMemory, saveSddSpec, getSddSpec, getSddSpecByCapability, getSddSpecRevision, listSddSpecs, listClients, createClient, updateClient, archiveClient, listClientMembers, addClientMember, removeClientMember, reportUsage, getUsageSummary, runUsageBackfill, locateCode, promoteMemory } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective, saveSddArtifact, getSddArtifact, getSddArtifactByKey, getSddArtifactRevision, listSddChanges, getSddChange, updateSddChange, searchSddArtifacts, linkSddChangeMemory, saveSddSpec, getSddSpec, getSddSpecByCapability, getSddSpecRevision, listSddSpecs, listClients, createClient, updateClient, archiveClient, listClientMembers, addClientMember, removeClientMember, reportUsage, getUsageSummary, runUsageBackfill, locateCode, getContextPack, formatContextPack, promoteMemory } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget, Task, TaskComment, TaskAssignee, Sprint, SprintRetrospective, TaskStatus, TaskPriority, SprintStatus, SddChange, SddArtifact, SddArtifactDetail, SddSearchHit, SddSpec, SddSpecDetail, Client, ClientMember, LocateCodeHit, UsageSummaryRow } from './client.js'
 import { planInstall } from './harness/plan.js'
 import { applyPlan } from './harness/materialize.js'
@@ -4902,6 +4902,38 @@ server.tool(
         ...results.map(formatLocateHit),
       ].join('\n')
       return { content: [{ type: 'text', text }] }
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ── Context pack (factory F2) ────────────────────────────────────────────────
+//
+// One call for the context of a task: ranked files with their best code chunks
+// and their import neighbours, each with a reason. Replaces locate + read loops.
+
+server.tool(
+  'get_context_pack',
+  'Assemble the context for a task in ONE call: the files most relevant to the task text (ranked by exact identifier/term match) with their best code chunks, plus the files they import, each with the reason it was picked and a content hash. Call this at the start of a task instead of locate_code + reading files one by one. Requires index_project first. The pack is pinned to a commit: pass `commit` when the task targets one; a STALE note means the index was built from another commit.',
+  {
+    project:   z.string().describe('Project key — must match the key used in index_project'),
+    query:     z.string().min(1).max(4096).describe('The task description (an issue title or request)'),
+    task_id:   z.string().uuid().optional().describe('Factory task id, when the pack is for one'),
+    commit:    z.string().regex(/^[0-9a-f]{40}$/).optional().describe('Full commit SHA the task targets'),
+    max_files: z.number().int().min(1).max(20).optional().describe('Maximum ranked files (default 8)'),
+    max_bytes: z.number().int().min(1).max(64000).optional().describe('Code byte budget (default 24000)'),
+  },
+  async (args) => {
+    try {
+      const response = await getContextPack(args)
+      if (response.pack.artifacts.length === 0) {
+        return { content: [{ type: 'text', text: `No context found for "${args.query}" in project "${args.project}". Has it been indexed (index_project)?` }] }
+      }
+      return { content: [{ type: 'text', text: formatContextPack(response) }] }
     } catch (err) {
       return {
         content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
