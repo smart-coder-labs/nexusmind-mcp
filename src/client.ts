@@ -2405,7 +2405,10 @@ export function formatContextPack(response: ContextPackResponse): string {
     const symbol = artifact.symbol ? ` — ${artifact.symbol}` : ''
     lines.push('', `[${i + 1}] ${artifact.path}${symbol} (${artifact.kind}) · ${artifact.reason}`)
     for (const e of evidence.filter(e => e.artifact === i)) {
-      lines.push(`lines ${e.start_line}-${e.end_line}${e.truncated ? ' (truncated)' : ''}:`, '```', e.content, '```')
+      // A fence longer than any backtick run in the code, so code cannot close it.
+      const longest = Math.max(0, ...(e.content.match(/`+/g) ?? []).map(run => run.length))
+      const fence = '`'.repeat(Math.max(3, longest + 1))
+      lines.push(`lines ${e.start_line}-${e.end_line}${e.truncated ? ' (truncated)' : ''}:`, fence, e.content, fence)
     }
   })
   return lines.join('\n')

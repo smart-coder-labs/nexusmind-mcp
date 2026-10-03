@@ -61,3 +61,9 @@ test('the formatted pack shows each artifact with its reason, code and staleness
   assert.match(text, /export function SaleDetail\(\) \{\}/)
   assert.match(text, /lines 1-1 \(truncated\):/)
 })
+
+test('code containing a fence cannot close the formatted block', () => {
+  const tricky = { ...response, evidence: [{ ...response.evidence[0], content: 'const md = "```\\nescape"' }] }
+  const text = formatContextPack(tricky)
+  assert.match(text, /\n````\n/)
+})

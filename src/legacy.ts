@@ -4921,8 +4921,8 @@ server.tool(
   'Assemble the context for a task in ONE call: the files most relevant to the task text (ranked by exact identifier/term match) with their best code chunks, plus the files they import, each with the reason it was picked and a content hash. Call this at the start of a task instead of locate_code + reading files one by one. Requires index_project first. The pack is pinned to a commit: pass `commit` when the task targets one; a STALE note means the index was built from another commit.',
   {
     project:   z.string().describe('Project key — must match the key used in index_project'),
-    query:     z.string().min(1).max(4096).describe('The task description (an issue title or request)'),
-    task_id:   z.string().uuid().optional().describe('Factory task id, when the pack is for one'),
+    query:     z.string().min(1).refine(q => Buffer.byteLength(q, 'utf8') <= 4096, 'at most 4096 bytes').describe('The task description (an issue title or request)'),
+    task_id:   z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/).optional().describe('Factory task id, when the pack is for one'),
     commit:    z.string().regex(/^[0-9a-f]{40}$/).optional().describe('Full commit SHA the task targets'),
     max_files: z.number().int().min(1).max(20).optional().describe('Maximum ranked files (default 8)'),
     max_bytes: z.number().int().min(1).max(64000).optional().describe('Code byte budget (default 24000)'),
