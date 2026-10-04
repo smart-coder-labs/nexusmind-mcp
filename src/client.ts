@@ -2414,6 +2414,94 @@ export function formatContextPack(response: ContextPackResponse): string {
   return lines.join('\n')
 }
 
+// ── Factory operator (software factory F3) ──────────────────────────────────
+//
+// What waits on a person, what the factory costs, a person's decision on one
+// merge, and tasks for the factory (NexusMind tasks labelled `factory`).
+
+export interface FactoryHeldMerge { subject: string; reason: string; source: string; created_at: string }
+export interface FactoryApprovedMerge { subject: string; approved_at: string; merges_after: string | null }
+export interface FactoryBlockedRun { run_id: string; agent: string; template_key: string; status: string; reason: string | null; finished_at: string | null }
+export interface FactoryWaitingTask { id: string; project: string; title: string; status: string; created_at: string }
+export interface FactoryDigest {
+  held_merges: FactoryHeldMerge[]
+  approved_merges: FactoryApprovedMerge[]
+  /** null when the caller cannot read autonomous runs. */
+  blocked_runs: FactoryBlockedRun[] | null
+  factory_tasks: FactoryWaitingTask[]
+  unlabeled_shadow: number
+  unlabeled_shadow_allows: number
+}
+export interface FactoryEconomics {
+  days: number
+  runs: number
+  cost_usd: number
+  by_model: { model: string | null; runs: number; cost_usd: number; input_tokens: number; output_tokens: number }[]
+  tier_choices: [string, number][]
+  frontier_avoidance: number | null
+  proposed_changes: number
+  cost_per_proposed_change: number | null
+  accepted_changes_tracked: boolean
+}
+
+export const FACTORY_TASK_CLASSES = ['docs', 'tests', 'ui', 'backend', 'bugfix', 'migration', 'infra', 'security', 'refactor'] as const
+export type FactoryTaskClass = (typeof FACTORY_TASK_CLASSES)[number]
+
+export function getFactoryDigest(): Promise<FactoryDigest> {
+  return request<FactoryDigest>('/v1/factory/digest')
+}
+
+export function getFactoryEconomics(input: { days?: number } = {}): Promise<FactoryEconomics> {
+  return request<FactoryEconomics>(`/v1/factory/economics?days=${input.days ?? 30}`)
+}
+
+export function decideFactoryMerge(input: { subject: string; approve: boolean; reason?: string }): Promise<{ id: string; merges_after: string | null }> {
+  const body: Record<string, unknown> = { subject: input.subject, action: 'merge', approve: input.approve }
+  if (input.reason !== undefined) body.reason = input.reason
+  return request<{ id: string; merges_after: string | null }>('/v1/factory/decisions', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function submitFactoryTask(input: { project: string; title: string; description?: string; task_class?: FactoryTaskClass }): Promise<Task> {
+  const body: Record<string, unknown> = { project: input.project, title: input.title }
+  if (input.description !== undefined) body.description = input.description
+  if (input.task_class !== undefined) body.task_class = input.task_class
+  return request<Task>('/v1/factory/tasks', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function listFactoryTasks(input: Omit<ListTasksInput, 'label'> = {}): Promise<Task[]> {
+  return listTasks({ ...input, label: 'factory' })
+}
+
+/** The digest as text for an agent: each list, then how to act on it. */
+export function formatFactoryDigest(digest: FactoryDigest): string {
+  const lines: string[] = []
+  const approved = digest.approved_merges ?? []
+  const blocked = digest.blocked_runs ?? []
+  if (!digest.held_merges.length && !approved.length && !blocked.length && !digest.factory_tasks.length && !digest.unlabeled_shadow) {
+    return 'Nothing is waiting on a person.'
+  }
+  if (digest.held_merges.length) {
+    lines.push(`Merges held for a person (${digest.held_merges.length}) — decide each with approve_factory_action:`)
+    for (const m of digest.held_merges) lines.push(`- ${m.subject} · ${m.reason} (${m.source})`)
+  }
+  if (approved.length) {
+    lines.push('', `Approved merges waiting out their soak (${approved.length}):`)
+    for (const m of approved) lines.push(`- ${m.subject} · approved ${m.approved_at}${m.merges_after ? `, merges after ${m.merges_after}` : ''}`)
+  }
+  if (blocked.length) {
+    lines.push('', `Runs that stopped short, last 7 days (${blocked.length}):`)
+    for (const r of blocked) lines.push(`- ${r.agent} [${r.status}] ${r.reason ?? 'no reason recorded'} · ${r.finished_at ?? ''}`)
+  }
+  if (digest.factory_tasks.length) {
+    lines.push('', `Factory tasks not started (${digest.factory_tasks.length}):`)
+    for (const t of digest.factory_tasks) lines.push(`- ${t.title} (${t.project}, ${t.status}, id ${t.id})`)
+  }
+  if (digest.unlabeled_shadow) {
+    lines.push('', `${digest.unlabeled_shadow} decision-model shadow decisions have no human label (${digest.unlabeled_shadow_allows} "allow"); label them in the admin.`)
+  }
+  return lines.join('\n')
+}
+
 // ── Promote memory (client/project scope → org asset) ────────────────────────
 //
 // Always an explicit call. The backend promotes a client- or project-scoped

@@ -8,19 +8,23 @@ const profile = process.env.NEXUSMIND_MCP_TOOL_PROFILE ?? cliProfile
 // An unknown profile must not fall through to the legacy catalog. Legacy is the
 // WIDEST surface, so a typo (`only-context` for `only_context`) on a deployment
 // that bought the narrow cut would expose everything the cut exists to hide.
-const KNOWN_PROFILES = ['legacy', 'essential', 'reduced_readonly', 'only_context']
+const KNOWN_PROFILES = ['legacy', 'essential', 'reduced_readonly', 'only_context', 'factory_operator']
 if (profile !== undefined && !KNOWN_PROFILES.includes(profile)) {
   throw new Error(`Unknown NEXUSMIND_MCP_TOOL_PROFILE "${profile}". Expected one of: ${KNOWN_PROFILES.join(', ')}`)
 }
 const valueAfter = (flag: string): string | undefined => { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : undefined }
 let activeDefinitions
-if (profile === 'essential' || profile === 'reduced_readonly' || profile === 'only_context') {
+if (profile === 'essential' || profile === 'reduced_readonly' || profile === 'only_context' || profile === 'factory_operator') {
   const { definitions } = await import('./reduced.js')
   // only_context is the curated registry cut down to context tools. The cut is
   // applied BEFORE the repository config's capability filter so a project that
   // disables a capability narrows the profile rather than tripping its
   // missing-tool check.
-  const base = profile === 'only_context' ? (await import('./only-context.js')).selectOnlyContext(definitions) : definitions
+  const base = profile === 'only_context'
+    ? (await import('./only-context.js')).selectOnlyContext(definitions)
+    : profile === 'factory_operator'
+      ? (await import('./factory-operator.js')).selectFactoryOperator(definitions)
+      : definitions
   const { loadRepositoryConfig, effectiveCapabilities, filterDefinitions, resolveProject, repositoryRelativePath } = await import('./repository-config.js')
   const loaded = loadRepositoryConfig(valueAfter('--config'))
   const explicitProject = valueAfter('--project')
@@ -35,6 +39,9 @@ if (profile === 'essential') {
 } else if (profile === 'only_context') {
   const { startEssential } = await import('./essential.js')
   await startEssential(activeDefinitions, 'nexusmind-only-context')
+} else if (profile === 'factory_operator') {
+  const { startEssential } = await import('./essential.js')
+  await startEssential(activeDefinitions, 'nexusmind-factory-operator')
 } else if (profile === 'reduced_readonly') {
   const { startReducedReadonly } = await import('./reduced.js')
   await startReducedReadonly(activeDefinitions)

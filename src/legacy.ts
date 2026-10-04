@@ -28,7 +28,7 @@ if (process.argv[2] === 'smoke') {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective, saveSddArtifact, getSddArtifact, getSddArtifactByKey, getSddArtifactRevision, listSddChanges, getSddChange, updateSddChange, searchSddArtifacts, linkSddChangeMemory, saveSddSpec, getSddSpec, getSddSpecByCapability, getSddSpecRevision, listSddSpecs, listClients, createClient, updateClient, archiveClient, listClientMembers, addClientMember, removeClientMember, reportUsage, getUsageSummary, runUsageBackfill, locateCode, getContextPack, formatContextPack, promoteMemory } from './client.js'
+import { storeMemory, searchMemories, listMemories, getMemoryById, deleteMemory, updateMemory, archiveMemory, restoreMemory, pinMemory, unpinMemory, updateMemoryNote, indexProject, searchCode, getSymbolContext, globalSearch, listCodeProjects, getCodeProjectFiles, deleteCodeProject, bulkDeleteMemories, mergeMemoryPair, bulkTagMemoriesSingle, listCollections, createCollection, updateCollection, deleteCollection, assignMemoryToCollection, listConventions, getConvention, storeConvention, updateConvention, archiveConvention, restoreConvention, deleteConvention, checkPolicy, listPolicies, createPolicy, updatePolicy, deletePolicy, listProjects, createProject, updateProject, getProjectMembers, addProjectMember, listUsers, inviteUser, disableUser, enableUser, listRoles, createRole, deleteRole, assignUserRole, getUsersByRole, listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listOrgKeys, revokeApiKey, createApiKey, getAuditLog, getOrgSettings, updateOrgSettings, getStats, getAgentActivity, getTagStats, importMemories, findDuplicateMemories, getMemoryTrends, updateOrg, renameTag, setAnnouncement, exportMemories, getMemoryFacets, getUsageStats, updateSession, listSessions, deleteSession, createSession, pinConvention, getMemoryHealth, scheduleMemoryDelete, reindexProject, listHarnesses, recommendHarnesses, getHarnessVersion, listHarnessConfigReviews, downloadHarnessVersion, approveHarnessInstall, recordHarnessInstallResult, createHarness, publishHarnessVersion, createHarnessConfigReview, listTasks, listMyTasks, getTask, createTask, updateTask, deleteTask, assignTask, addTaskComment, addTaskLabel, linkTaskSpec, resolveTasksForSpec, listSprints, createSprint, createSprintRetrospective, saveSddArtifact, getSddArtifact, getSddArtifactByKey, getSddArtifactRevision, listSddChanges, getSddChange, updateSddChange, searchSddArtifacts, linkSddChangeMemory, saveSddSpec, getSddSpec, getSddSpecByCapability, getSddSpecRevision, listSddSpecs, listClients, createClient, updateClient, archiveClient, listClientMembers, addClientMember, removeClientMember, reportUsage, getUsageSummary, runUsageBackfill, locateCode, getContextPack, formatContextPack, promoteMemory, getFactoryDigest, formatFactoryDigest, getFactoryEconomics, decideFactoryMerge, submitFactoryTask, listFactoryTasks, FACTORY_TASK_CLASSES } from './client.js'
 import type { Memory, CodeSearchResult, CodeChunk, Session, Convention, MemoryHealth, Harness, HarnessRecommendation, HarnessVersion, HarnessConfigReview, HarnessFormat, HarnessTarget, Task, TaskComment, TaskAssignee, Sprint, SprintRetrospective, TaskStatus, TaskPriority, SprintStatus, SddChange, SddArtifact, SddArtifactDetail, SddSearchHit, SddSpec, SddSpecDetail, Client, ClientMember, LocateCodeHit, UsageSummaryRow } from './client.js'
 import { planInstall } from './harness/plan.js'
 import { applyPlan } from './harness/materialize.js'
@@ -4940,6 +4940,93 @@ server.tool(
         isError: true,
       }
     }
+  }
+)
+
+// ── Factory operator (software factory F3) ──────────────────────────────────
+
+function errorText(err: unknown) {
+  return { content: [{ type: 'text' as const, text: `Error: ${(err as Error).message}` }], isError: true }
+}
+
+server.tool(
+  'submit_factory_task',
+  'Hand a task to the software factory: creates a backlog NexusMind task labelled "factory" (plus its class) in the project.',
+  {
+    project: z.string().describe('Project'),
+    title: z.string().min(1).max(300).describe('What should be done'),
+    description: z.string().optional().describe('Details and acceptance criteria'),
+    task_class: z.enum(FACTORY_TASK_CLASSES).optional().describe('Task class'),
+  },
+  async (args) => {
+    try {
+      const task = await submitFactoryTask(args)
+      return { content: [{ type: 'text', text: `Factory task created: ${task.title} (id ${task.id}, project ${task.project}, labels ${(task.labels ?? []).join(', ')}).` }] }
+    } catch (err) { return errorText(err) }
+  }
+)
+
+server.tool(
+  'list_factory_tasks',
+  'List tasks handed to the factory (label "factory"), optionally by project or status.',
+  {
+    project: z.string().optional().describe('Project'),
+    status: z.enum(['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled']).optional().describe('Status'),
+    limit: z.number().int().min(1).max(200).optional().describe('Max tasks'),
+  },
+  async (args) => {
+    try {
+      const tasks = await listFactoryTasks(args)
+      if (tasks.length === 0) return { content: [{ type: 'text', text: 'No factory tasks.' }] }
+      const lines = tasks.map((t, i) => `[${i + 1}] ${t.title} · ${t.status} · ${t.project} (id ${t.id})`)
+      return { content: [{ type: 'text', text: `${tasks.length} factory task(s):\n\n${lines.join('\n')}` }] }
+    } catch (err) { return errorText(err) }
+  }
+)
+
+server.tool(
+  'get_human_digest',
+  'What the factory is waiting on a person for: merges held for approval, runs that stopped short, unstarted factory tasks, unlabelled decision-model decisions.',
+  {},
+  async () => {
+    try {
+      return { content: [{ type: 'text', text: formatFactoryDigest(await getFactoryDigest()) }] }
+    } catch (err) { return errorText(err) }
+  }
+)
+
+server.tool(
+  'approve_factory_action',
+  'Approve or reject ONE merge on ONE exact head (owner/repo#number@sha, as shown by get_human_digest). It applies only to that commit and still passes every check before anything merges.',
+  {
+    subject: z.string().regex(/^[\w.-]+\/[\w.-]+#[1-9]\d*@[0-9a-f]{40}$/).describe('owner/repo#number@<40-hex sha>'),
+    approve: z.boolean().describe('true approves, false rejects'),
+    reason: z.string().max(500).optional().describe('Why'),
+  },
+  async (args) => {
+    try {
+      await decideFactoryMerge(args)
+      return { content: [{ type: 'text', text: `${args.approve ? 'Approved' : 'Rejected'} the merge of ${args.subject}. The factory applies it the next time it evaluates that exact commit.` }] }
+    } catch (err) { return errorText(err) }
+  }
+)
+
+server.tool(
+  'get_factory_economics',
+  'What the factory cost: spend by model, share of runs below the frontier tier, cost per proposed change.',
+  { days: z.number().int().min(1).max(365).optional().describe('Window in days (default 30)') },
+  async (args) => {
+    try {
+      const e = await getFactoryEconomics(args)
+      const lines = [
+        `Last ${e.days} days: ${e.runs} runs, $${e.cost_usd.toFixed(2)} at list price.`,
+        `Runs below the frontier tier: ${e.frontier_avoidance === null ? 'n/a' : `${Math.round(e.frontier_avoidance * 100)}%`}.`,
+        `Proposed changes: ${e.proposed_changes}; cost per proposed change: ${e.cost_per_proposed_change === null ? 'n/a' : `$${e.cost_per_proposed_change.toFixed(2)}`}.`,
+        e.accepted_changes_tracked ? '' : 'Accepted (merged) changes are not measured yet.',
+        ...e.by_model.map(m => `- ${m.model ?? 'unknown'}: ${m.runs} runs, $${m.cost_usd.toFixed(2)}`),
+      ].filter(Boolean)
+      return { content: [{ type: 'text', text: lines.join('\n') }] }
+    } catch (err) { return errorText(err) }
   }
 )
 
