@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.20.0
+
+### Added
+
+- **`factory_operator` tool profile** (software factory plan D4): the tools to run the factory.
+  - `submit_factory_task`: a backlog NexusMind task labelled `factory`, plus its class.
+  - `list_factory_tasks` and `get_factory_task`.
+  - `get_human_digest`: merges held for a person, approved merges, runs that stopped short,
+    unstarted factory tasks, and unlabelled decision-model decisions.
+  - `approve_factory_action`: one merge on one exact head. Approving starts the soak, which re-runs
+    every check before merging.
+  - `get_factory_economics`: spend by model, runs below the frontier tier, and cost per proposed
+    change.
+  - `get_context_pack`.
+
+  Select the profile with `NEXUSMIND_MCP_TOOL_PROFILE=factory_operator`. The allow-list lives in
+  `src/factory-operator.ts`, and startup fails if a listed tool disappears.
+- The operator tools are also in `legacy` (154 tools). Requires a backend with migration v85 or later.
+
 ## 0.19.0
 
 ### Added
