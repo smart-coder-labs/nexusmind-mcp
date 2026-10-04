@@ -2420,11 +2420,14 @@ export function formatContextPack(response: ContextPackResponse): string {
 // merge, and tasks for the factory (NexusMind tasks labelled `factory`).
 
 export interface FactoryHeldMerge { subject: string; reason: string; source: string; created_at: string }
+export interface FactoryApprovedMerge { subject: string; approved_at: string; merges_after: string | null }
 export interface FactoryBlockedRun { run_id: string; agent: string; template_key: string; status: string; reason: string | null; finished_at: string | null }
 export interface FactoryWaitingTask { id: string; project: string; title: string; status: string; created_at: string }
 export interface FactoryDigest {
   held_merges: FactoryHeldMerge[]
-  blocked_runs: FactoryBlockedRun[]
+  approved_merges: FactoryApprovedMerge[]
+  /** null when the caller cannot read autonomous runs. */
+  blocked_runs: FactoryBlockedRun[] | null
   factory_tasks: FactoryWaitingTask[]
   unlabeled_shadow: number
   unlabeled_shadow_allows: number
@@ -2452,10 +2455,10 @@ export function getFactoryEconomics(input: { days?: number } = {}): Promise<Fact
   return request<FactoryEconomics>(`/v1/factory/economics?days=${input.days ?? 30}`)
 }
 
-export function decideFactoryMerge(input: { subject: string; approve: boolean; reason?: string }): Promise<{ id: string }> {
+export function decideFactoryMerge(input: { subject: string; approve: boolean; reason?: string }): Promise<{ id: string; merges_after: string | null }> {
   const body: Record<string, unknown> = { subject: input.subject, action: 'merge', approve: input.approve }
   if (input.reason !== undefined) body.reason = input.reason
-  return request<{ id: string }>('/v1/factory/decisions', { method: 'POST', body: JSON.stringify(body) })
+  return request<{ id: string; merges_after: string | null }>('/v1/factory/decisions', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export function submitFactoryTask(input: { project: string; title: string; description?: string; task_class?: FactoryTaskClass }): Promise<Task> {
@@ -2472,16 +2475,22 @@ export function listFactoryTasks(input: Omit<ListTasksInput, 'label'> = {}): Pro
 /** The digest as text for an agent: each list, then how to act on it. */
 export function formatFactoryDigest(digest: FactoryDigest): string {
   const lines: string[] = []
-  if (!digest.held_merges.length && !digest.blocked_runs.length && !digest.factory_tasks.length && !digest.unlabeled_shadow) {
+  const approved = digest.approved_merges ?? []
+  const blocked = digest.blocked_runs ?? []
+  if (!digest.held_merges.length && !approved.length && !blocked.length && !digest.factory_tasks.length && !digest.unlabeled_shadow) {
     return 'Nothing is waiting on a person.'
   }
   if (digest.held_merges.length) {
     lines.push(`Merges held for a person (${digest.held_merges.length}) — decide each with approve_factory_action:`)
     for (const m of digest.held_merges) lines.push(`- ${m.subject} · ${m.reason} (${m.source})`)
   }
-  if (digest.blocked_runs.length) {
-    lines.push('', `Runs that stopped short, last 7 days (${digest.blocked_runs.length}):`)
-    for (const r of digest.blocked_runs) lines.push(`- ${r.agent} [${r.status}] ${r.reason ?? 'no reason recorded'} · ${r.finished_at ?? ''}`)
+  if (approved.length) {
+    lines.push('', `Approved merges waiting out their soak (${approved.length}):`)
+    for (const m of approved) lines.push(`- ${m.subject} · approved ${m.approved_at}${m.merges_after ? `, merges after ${m.merges_after}` : ''}`)
+  }
+  if (blocked.length) {
+    lines.push('', `Runs that stopped short, last 7 days (${blocked.length}):`)
+    for (const r of blocked) lines.push(`- ${r.agent} [${r.status}] ${r.reason ?? 'no reason recorded'} · ${r.finished_at ?? ''}`)
   }
   if (digest.factory_tasks.length) {
     lines.push('', `Factory tasks not started (${digest.factory_tasks.length}):`)

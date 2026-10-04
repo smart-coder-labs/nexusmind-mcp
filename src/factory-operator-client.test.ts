@@ -42,10 +42,11 @@ test('submit and list factory tasks go to the factory endpoint and the factory l
 })
 
 test('the digest text lists what waits and says when nothing does', () => {
-  assert.equal(formatFactoryDigest({ held_merges: [], blocked_runs: [], factory_tasks: [], unlabeled_shadow: 0, unlabeled_shadow_allows: 0 }), 'Nothing is waiting on a person.')
+  assert.equal(formatFactoryDigest({ held_merges: [], approved_merges: [], blocked_runs: null, factory_tasks: [], unlabeled_shadow: 0, unlabeled_shadow_allows: 0 }), 'Nothing is waiting on a person.')
   const text = formatFactoryDigest({
     held_merges: [{ subject: SUBJECT, reason: 'manual policy', source: 'policy', created_at: 'now' }],
-    blocked_runs: [],
+    approved_merges: [{ subject: 'acme/app#8@' + 'b'.repeat(40), approved_at: 'earlier', merges_after: 'soon' }],
+    blocked_runs: null,
     factory_tasks: [{ id: 't1', project: 'app', title: 'Document refunds', status: 'backlog', created_at: 'now' }],
     unlabeled_shadow: 3,
     unlabeled_shadow_allows: 1,
@@ -53,5 +54,8 @@ test('the digest text lists what waits and says when nothing does', () => {
   assert.match(text, /Merges held for a person \(1\)/)
   assert.match(text, new RegExp(SUBJECT))
   assert.match(text, /Document refunds/)
+  assert.match(text, /Approved merges waiting out their soak \(1\)/)
+  assert.match(text, /merges after soon/)
+  assert.doesNotMatch(text, /Runs that stopped short/)
   assert.match(text, /3 decision-model shadow decisions/)
 })
